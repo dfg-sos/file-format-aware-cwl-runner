@@ -1,4 +1,4 @@
-"""cwltool-sos end to end with a mocked format service (no network, no containers)."""
+"""cwl-format-aware-runner end to end with a mocked format service (no network, no containers)."""
 
 import json
 from pathlib import Path

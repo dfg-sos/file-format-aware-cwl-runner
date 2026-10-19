@@ -3,10 +3,10 @@ CWL integration for the SOS File Format Service: design-time format linting and 
 
 Vanilla cwltool checks format *labels*: a tool's declared output `format` is stamped onto the
 produced File without looking at it, so a mislabelled file passes every downstream check.
-`cwltool-sos` runs unmodified cwltool and sends the actual files to the
+`cwl-format-aware-runner` runs unmodified cwltool and sends the actual files to the
 [SOS File Format Service](../sos-file-format-service) before (pre) and after (post) every step.
 
-- `cwltool-sos`: cwltool plus runtime validation. Accepts all cwltool flags.
+- `cwl-format-aware-runner`: cwltool plus runtime validation. Accepts all cwltool flags.
 - `cwl-format-lint`: static check that connected ports have compatible formats (ontology subclass).
 
 Pinned versions: cwltool 3.3.20260925135507, cwl-utils 0.45 (see `pyproject.toml` / `uv.lock`).
@@ -20,7 +20,7 @@ cd ../sos-file-format-service && docker compose up -d --build   # API :8000, ont
 
 ## Runtime validation
 ```sh
-uv run cwltool-sos --format-validation-mode full tests/fixtures/a_relabel.cwl tests/fixtures/jobs/a2.yml
+uv run cwl-format-aware-runner --format-validation-mode full tests/fixtures/a_relabel.cwl tests/fixtures/jobs/a2.yml
 ```
 
 | Flag | Default | Meaning |

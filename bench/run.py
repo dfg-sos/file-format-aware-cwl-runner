@@ -2,7 +2,7 @@
 
     uv run python bench/run.py bench/raster_chain.cwl bench/inputs/raster_10MB.yml --repeat 10
 
-Every repetition is a fresh `cwltool-sos` process per mode (off = baseline, no service calls).
+Every repetition is a fresh `cwl-format-aware-runner` process per mode (off = baseline, no service calls).
 Validation uses `warn` so an invalid file never shortens a run. Writes to the output dir:
   timing.jsonl  every run/check/main record (see README)
   runs.csv      one row per run: wall time, exit code, summed check and main-command time

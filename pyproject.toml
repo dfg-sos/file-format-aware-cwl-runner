@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cwltool-sos = "format_aware_cwl.cli:main"
+cwl-format-aware-runner = "format_aware_cwl.cli:main"
 cwl-format-lint = "format_aware_cwl.lint:main"
 
 [dependency-groups]

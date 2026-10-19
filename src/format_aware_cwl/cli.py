@@ -1,4 +1,4 @@
-"""`cwltool-sos`: cwltool with runtime file-format validation via the SOS File Format Service."""
+"""`cwl-format-aware-runner`: cwltool with runtime file-format validation via the SOS File Format Service."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def add_format_arguments(parser: argparse.ArgumentParser) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = arg_parser()
-    parser.prog = "cwltool-sos"
+    parser.prog = "cwl-format-aware-runner"
     add_format_arguments(parser)
     addl = [x for x in os.environ.get("CWLTOOL_OPTIONS", "").split(" ") if x]
     args = parser.parse_args(addl + argv)
