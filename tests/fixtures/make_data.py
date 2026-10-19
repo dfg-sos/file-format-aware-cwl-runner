@@ -1,0 +1,47 @@
+"""Generate the small geodata files used by the fixtures (committed; rerun only to change them).
+
+Needs rasterio and fiona, e.g. the format service's venv:
+    ../sos-file-format-service/.venv/bin/python tests/fixtures/make_data.py
+"""
+
+from pathlib import Path
+
+import fiona
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+
+DATA = Path(__file__).parent / "data"
+
+
+def raster(path: Path, crs: str) -> None:
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint8",
+        crs=crs,
+        transform=from_origin(9.9, 49.8, 0.01, 0.01),
+    ) as dst:
+        dst.write(np.arange(16, dtype="uint8").reshape(1, 4, 4))
+
+
+def vector(path: Path, driver: str, geom_type: str, coords: list) -> None:
+    schema = {"geometry": geom_type, "properties": {"name": "str"}}
+    with fiona.open(path, "w", driver=driver, crs="EPSG:4326", schema=schema) as dst:
+        for i, c in enumerate(coords):
+            dst.write({"geometry": {"type": geom_type, "coordinates": c}, "properties": {"name": f"f{i}"}})
+
+
+if __name__ == "__main__":
+    DATA.mkdir(exist_ok=True)
+    raster(DATA / "raster_4326.tif", "EPSG:4326")
+    lines = [[(9.93, 49.79), (9.95, 49.80)], [(9.92, 49.78), (9.94, 49.77)]]
+    vector(DATA / "roads.geojson", "GeoJSON", "LineString", lines)
+    vector(DATA / "roads.shp", "ESRI Shapefile", "LineString", lines)
+    vector(DATA / "points.geojson", "GeoJSON", "Point", [(9.93, 49.79), (9.95, 49.80)])
+    for p in sorted(DATA.iterdir()):
+        print(p.name, p.stat().st_size)

@@ -1,0 +1,31 @@
+"""CWL extension fields for `full` mode: expected CRS and geometry type on a File port.
+
+Declare in a CWL document:
+    $namespaces: {sos: "https://w3id.org/sos/cwl#"}
+    ...
+    outputs:
+      roads: {type: File, format: edam:format_4119, sos:expectedCRS: "EPSG:4326", sos:expectedGeometryType: LineString}
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+SOS_NAMESPACE = "https://w3id.org/sos/cwl#"
+EXPECTED_CRS = SOS_NAMESPACE + "expectedCRS"
+EXPECTED_GEOMETRY_TYPE = SOS_NAMESPACE + "expectedGeometryType"
+
+
+def _get(port: Mapping[str, Any], iri: str) -> str | None:
+    # schema-salad expands namespaced keys to the full IRI; accept the prefixed form too.
+    value = port.get(iri, port.get("sos:" + iri[len(SOS_NAMESPACE) :]))
+    return str(value) if value not in (None, "") else None
+
+
+def expected_crs(port: Mapping[str, Any]) -> str | None:
+    return _get(port, EXPECTED_CRS)
+
+
+def expected_geometry_type(port: Mapping[str, Any]) -> str | None:
+    return _get(port, EXPECTED_GEOMETRY_TYPE)
