@@ -16,7 +16,8 @@ SERVICE = "http://ffs.test"
 def run(tmp_path, *argv, status="FAILURE"):
     log = tmp_path / "t.jsonl"
     with respx.mock(assert_all_called=False) as mock:
-        route = mock.post(f"{SERVICE}/api/v1/validate").mock(
+        # one route for both /validate (upload) and /validate/local (by path)
+        route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate(/local)?$").mock(
             return_value=httpx.Response(200, json={"status": status, "errors": [{"message": "not a GeoTIFF"}]})
         )
         rc = cli.main(
@@ -72,7 +73,7 @@ def test_pre_check_failure_skips_command(tmp_path):
     bad.write_text("{}")
     job = tmp_path / "job.json"
     job.write_text(
-        json.dumps({"raster": {"class": "File", "path": str(bad), "format": "http://edamontology.org/format_4109"}})
+        json.dumps({"raster": {"class": "File", "path": str(bad), "format": "https://dfg-sos.github.io/ontologies/eo-formats#GeoTIFF"}})
     )
     rc, _, records = run(tmp_path, str(CWL / "wf_in.cwl"), str(job))
     assert rc == 1
@@ -81,7 +82,9 @@ def test_pre_check_failure_skips_command(tmp_path):
 
 def test_full_mode_sends_extension_fields(tmp_path):
     _, route, _ = run(tmp_path, "--format-validation-mode", "full", str(CWL / "produce.cwl"))
-    assert b'name="expected_crs"\r\n\r\nEPSG:4326' in route.calls.last.request.content
+    request = route.calls.last.request
+    assert request.url.path == "/api/v1/validate/local"  # host files are sent by path
+    assert json.loads(request.content)["expected_crs"] == "EPSG:4326"
 
 
 def test_unannotated_ports_are_skipped(tmp_path):
@@ -94,3 +97,9 @@ def test_off_is_plain_cwltool(tmp_path):
     rc, route, records = run(tmp_path, "--format-validation", "off", str(CWL / "wf.cwl"))
     assert rc == 0 and route.call_count == 0
     assert by_type(records, "check") == [] and len(by_type(records, "main")) == 2
+
+
+def test_upload_transfer_is_logged(tmp_path):
+    _, route, records = run(tmp_path, "--format-validation", "warn", "--format-transfer", "upload", str(CWL / "wf.cwl"))
+    assert {c["transfer"] for c in by_type(records, "check")} == {"upload"}
+    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate"}

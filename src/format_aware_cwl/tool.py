@@ -92,6 +92,8 @@ class Validator:
                 mode=self.policy.mode,
                 result=result.status,
                 message=result.message,
+                transfer=result.transfer,
+                server_timing=result.server_timing,
                 t_start=t_start,
                 t_end=t_end,
                 duration_ms=duration_ms(t_start, t_end),

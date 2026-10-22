@@ -1,11 +1,19 @@
 """Acceptance tests against a running SOS File Format Service.
 
-    cd ../sos-file-format-service && docker compose up -d --build
+    docker run -d -p 8000:8000 -v "$PWD/tests/fixtures/mappings:/app/mappings:ro" \
+        ghcr.io/dfg-sos/file-format-service:latest
     uv run pytest -m service
 
-The CWL fixtures load their ontology from http://localhost:8080/edam_eo.owl (`$schemas`, read by
-cwltool on the host). The service fetches ontologies itself, so the linter passes the
-compose-internal URL (SOS_FFS_ONTOLOGY_URL, default http://ontology/edam_eo.owl).
+The service ships no format mappings; tests/fixtures/mappings/eo-formats.json provides the one for
+the EO formats ontology.
+
+The CWL fixtures load the EO formats ontology from
+https://dfg-sos.github.io/ontologies/eo-formats.owl (`$schemas`), which both cwltool and the
+service fetch. SOS_FFS_ONTOLOGY_URL overrides the URL the linter sends to
+the service (e.g. file:///ontology/eo-formats.owl for a mounted copy).
+
+By-path validation (/validate/local) is tested only if SOS_FFS_TEST_SHARED_DIR names a host
+directory that the service shares (SOS_FFS_SHARED_DIRS); otherwise `auto` falls back to upload.
 """
 
 import json
@@ -22,7 +30,8 @@ pytestmark = pytest.mark.service
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SERVICE = os.environ.get("SOS_FFS_URL", "http://localhost:8000")
-ONTOLOGY_FOR_SERVICE = os.environ.get("SOS_FFS_ONTOLOGY_URL", "http://ontology/edam_eo.owl")
+ONTOLOGY_OVERRIDE = os.environ.get("SOS_FFS_ONTOLOGY_URL")
+SHARED_DIR = os.environ.get("SOS_FFS_TEST_SHARED_DIR")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -108,7 +117,11 @@ def test_timing_log_records(tmp_path):
     ],
 )
 def test_linter_fixture_d(capsys, wf, expected, rc):
-    argv = ["--format-service-url", SERVICE, "--format-ontology-url", ONTOLOGY_FOR_SERVICE]
+    argv = [
+        "--format-service-url",
+        SERVICE,
+        *(["--format-ontology-url", ONTOLOGY_OVERRIDE] if ONTOLOGY_OVERRIDE else []),
+    ]
     assert lint.main([*argv, "--json", *args(wf)]) == rc
     findings = json.loads(capsys.readouterr().out)["findings"]
     assert {(f["source"], f["sink"]): f["status"] for f in findings}[("roads", "consume/data")] == expected
@@ -117,7 +130,7 @@ def test_linter_fixture_d(capsys, wf, expected, rc):
 
 
 def test_linter_official_online_edam(capsys):
-    """The service fetches the official EDAM itself; EO formats are not part of it."""
+    """The service fetches the official EDAM itself; EO formats are not part of it (422 -> unknown-format)."""
     rc = lint.main(["--format-service-url", SERVICE, "--json", *args("f_edam_online.cwl")])
     findings = {f["sink"]: f["status"] for f in json.loads(capsys.readouterr().out)["findings"]}
     assert findings == {"align/s": "compatible", "climate/c": "incompatible", "gis/g": "unknown-format"}
@@ -145,3 +158,44 @@ def test_container_jobs_are_checked(tmp_path):
     assert {r["step"] for r in records if r["record"] == "main"} == {"relabel", "consume"}
     # A2 content error is caught in the containerised producer
     assert cli.main([*common, "--format-validation-mode", "full", *files]) == 1
+
+
+@pytest.mark.skipif(not SHARED_DIR, reason="SOS_FFS_TEST_SHARED_DIR not set")
+def test_local_transfer_on_shared_storage(tmp_path):
+    import shutil
+    import tempfile
+
+    shared = Path(tempfile.mkdtemp(dir=SHARED_DIR))
+    try:
+        for name in ("roads.shp", "roads.shx", "roads.dbf", "roads.prj"):
+            shutil.copy(FIXTURES / "data" / name, shared / name)
+        job = shared / "job.yml"
+        job.write_text(
+            f'roads: {{class: File, location: {shared / "roads.shp"}, format: "https://dfg-sos.github.io/ontologies/eo-formats#Shapefile"}}\n'
+        )
+        log = tmp_path / "t.jsonl"
+        rc = cli.main(
+            [
+                "--quiet",
+                "--outdir",
+                str(shared / "out"),
+                "--tmpdir-prefix",
+                f"{shared}/",
+                "--tmp-outdir-prefix",
+                f"{shared}/",
+                "--format-service-url",
+                SERVICE,
+                "--format-transfer",
+                "local",
+                "--format-timing-log",
+                str(log),
+                *args("d_shapefile_to_vector.cwl"),
+                str(job),
+            ]
+        )
+        assert rc == 0
+        checks = [json.loads(line) for line in log.read_text().splitlines() if '"check"' in line]
+        assert [(c["transfer"], c["result"]) for c in checks] == [("local", "SUCCESS")]
+        assert "validate" in checks[0]["server_timing"]
+    finally:
+        shutil.rmtree(shared, ignore_errors=True)

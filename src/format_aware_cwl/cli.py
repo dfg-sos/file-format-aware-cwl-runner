@@ -55,6 +55,14 @@ def add_format_arguments(parser: argparse.ArgumentParser) -> None:
         default="fail",
         help="When the service is unreachable or rejects a request (default: fail).",
     )
+    g.add_argument(
+        "--format-transfer",
+        choices=["auto", "local", "upload"],
+        default="auto",
+        help="How files reach the service: local = by path (/validate/local, needs SOS_FFS_SHARED_DIRS on the "
+        "service), upload = multipart upload, auto = by path, falling back to upload when the service cannot "
+        "read the path (default).",
+    )
     g.add_argument("--format-service-timeout", type=float, default=300.0, help="Seconds per request.")
     g.add_argument(
         "--format-timing-log",
@@ -91,7 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         service_error=args.format_service_error,
     )
     directions = {"both": {PRE, POST}, "pre": {PRE}, "post": {POST}}[args.format_check]
-    client = FormatServiceClient(args.format_service_url, timeout=args.format_service_timeout)
+    client = FormatServiceClient(
+        args.format_service_url, timeout=args.format_service_timeout, transfer=args.format_transfer
+    )
     log = TimingLog(args.format_timing_log, args.format_run_id)
     log.run_record(format_flags(args), args.format_service_url if policy.enabled else None)
     # With --format-validation off the tool subclass only records job->step names (no wrapping,
