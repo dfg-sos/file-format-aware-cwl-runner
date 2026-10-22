@@ -33,6 +33,6 @@ if __name__ == "__main__":
             dst.write(rng.integers(0, 255, (1, side, side), dtype="uint8"))
         job = OUT / f"raster_{mb:g}MB.yml"
         job.write_text(
-            f'raster: {{class: File, location: {path.name}, format: "http://edamontology.org/format_4109"}}\n'
+            f'raster: {{class: File, location: {path.name}, format: "https://dfg-sos.github.io/ontologies/eo-formats#GeoTIFF"}}\n'
         )
         print(path, path.stat().st_size)
