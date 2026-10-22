@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "ontology_uri": "https://dfg-sos.github.io/ontologies/eo-formats#",
+  "description": "Mapping from the SOS EO formats ontology (https://dfg-sos.github.io/ontologies/eo-formats.owl) to format_validator identifiers. Test fixture for format-aware-cwl-runner; mount it at /app/mappings in the format service.",
+  "mappings": {
+    "COG": "cog",
+    "DEM": "dem",
+    "DSM": "dsm",
+    "DTM": "dtm",
+    "EsriJSON": "esrijson",
+    "GeoJSON": "geojson",
+    "GeoPackage": "geopackage",
+    "GeoParquet": "geoparquet",
+    "GeoTIFF": "geotiff",
+    "GeoZarr": "geozarr",
+    "GML": "gml",
+    "GPX": "gpx",
+    "GRIB": "grib",
+    "KML": "kml",
+    "NetCDF_CF": "netcdf",
+    "OSM_JSON": "osm_json",
+    "OSM_XML": "osm_xml",
+    "PBF": "pbf",
+    "Shapefile": "shapefile",
+    "VRT": "vrt",
+    "WKB": "wkb",
+    "WKT": "wkt",
+    "XDMF": "xdmf",
+    "GIS": "gis_data",
+    "Raster": "raster",
+    "Vector": "vector"
+  }
+}

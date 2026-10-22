@@ -1,10 +1,10 @@
-# Fixture D: Shapefile workflow input into a vector step input (linter: compatible).
+# Fixture D: Shapefile workflow input into a Vector step input (linter: compatible).
 cwlVersion: v1.2
-$namespaces: {edam: "http://edamontology.org/", sos: "https://w3id.org/sos/cwl#"}
-$schemas: [http://localhost:8080/edam_eo.owl]
+$namespaces: {eo: "https://dfg-sos.github.io/ontologies/eo-formats#", sos: "https://dfg-sos.github.io/ontologies/cwl#"}
+$schemas: [https://dfg-sos.github.io/ontologies/eo-formats.owl]
 class: Workflow
 inputs:
-  roads: {type: File, format: edam:format_4119, secondaryFiles: [^.shx, ^.dbf, ^.prj]}
+  roads: {type: File, format: eo:Shapefile, secondaryFiles: [^.shx, ^.dbf, ^.prj]}
 outputs:
   size: {type: File, outputSource: consume/size}
 steps:

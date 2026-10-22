@@ -1,1 +1,1 @@
-roads: {class: File, location: ../data/roads.shp, format: "http://edamontology.org/format_4119"}
+roads: {class: File, location: ../data/roads.shp, format: "https://dfg-sos.github.io/ontologies/eo-formats#Shapefile"}

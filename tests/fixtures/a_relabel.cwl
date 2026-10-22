@@ -1,8 +1,8 @@
 # Fixture A: a GeoJSON file is labelled GeoTIFF and consumed as GeoTIFF.
 # Vanilla cwltool succeeds. A1 (name out.geojson) fails in basic mode, A2 (out.tif) only in full mode.
 cwlVersion: v1.2
-$namespaces: {edam: "http://edamontology.org/", sos: "https://w3id.org/sos/cwl#"}
-$schemas: [http://localhost:8080/edam_eo.owl]
+$namespaces: {eo: "https://dfg-sos.github.io/ontologies/eo-formats#", sos: "https://dfg-sos.github.io/ontologies/cwl#"}
+$schemas: [https://dfg-sos.github.io/ontologies/eo-formats.owl]
 class: Workflow
 inputs:
   src: File
