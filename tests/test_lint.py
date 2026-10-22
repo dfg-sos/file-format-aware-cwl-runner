@@ -10,27 +10,24 @@ from format_aware_cwl.client import FormatServiceClient
 
 CWL = Path(__file__).parent / "cwl"
 SERVICE = "http://ffs.test"
-EDAM = "http://edamontology.org/"
+EO = "https://dfg-sos.github.io/ontologies/eo-formats#"
 # actual -> set of expected formats it is compatible with (beyond itself)
-SUBCLASS = {"format_4100": {"format_4109"}, "format_4119": {"format_4126"}}
-KNOWN = {"format_4100", "format_4109", "format_4119", "format_4126"}
+SUBCLASS = {"COG": {"GeoTIFF"}, "Shapefile": {"Vector"}}
+KNOWN = {"COG", "GeoTIFF", "Shapefile", "Vector"}
 
 
 def fake_compat(request):
     body = json.loads(request.content)
-    actual, expected = body["actual_format"].rsplit("/", 1)[-1], body["expected_format"].rsplit("/", 1)[-1]
+    actual, expected = body["actual_format"].rsplit("#", 1)[-1], body["expected_format"].rsplit("#", 1)[-1]
+    unknown = [body[k] for k in ("expected_format", "actual_format") if body[k].rsplit("#", 1)[-1] not in KNOWN]
+    if unknown:
+        return httpx.Response(422, json={"detail": {"message": "not defined", "unknown_formats": unknown}})
     ok = actual == expected or expected in SUBCLASS.get(actual, set())
     return httpx.Response(200, json={"compatible": ok, "message": ""})
 
 
-def fake_info(request):
-    fmt = json.loads(request.content)["format_identifier"].rsplit("/", 1)[-1]
-    return httpx.Response(200, json={"label": fmt if fmt in KNOWN else None, "parents": []})
-
-
 def mock_service(compat=fake_compat):
     respx.post(f"{SERVICE}/api/v1/compatibility").mock(side_effect=compat)
-    respx.post(f"{SERVICE}/api/v1/format-info").mock(side_effect=fake_info)
 
 
 def run_lint(capsys, *argv, compat=fake_compat):
@@ -44,7 +41,7 @@ def run_lint(capsys, *argv, compat=fake_compat):
 def test_lint_findings(capsys):
     rc, findings, out = run_lint(capsys)
     assert rc == 1
-    assert out["ontologies"] == ["http://ontology.test/edam.owl"]
+    assert out["ontologies"] == ["http://ontology.test/eo-formats.owl"]
     assert findings[("roads", "consume/raster")]["status"] == "incompatible"
     assert findings[("roads", "inner/r")]["status"] == "incompatible"
     assert findings[("inner/run/r", "inner/run/c2/raster")]["status"] == "compatible"  # COG ⊂ GeoTIFF, any-of
@@ -53,10 +50,10 @@ def test_lint_findings(capsys):
 
 def test_ontology_override_and_service_error(capsys):
     def down(request):
-        assert json.loads(request.content)["ontology_schema_url"] == "http://ontology/edam.owl"
+        assert json.loads(request.content)["ontology_schema_url"] == "http://ontology/eo-formats.owl"
         return httpx.Response(502, json={"detail": "cannot fetch"})
 
-    rc, findings, _ = run_lint(capsys, "--format-ontology-url", "http://ontology/edam.owl", compat=down)
+    rc, findings, _ = run_lint(capsys, "--format-ontology-url", "http://ontology/eo-formats.owl", compat=down)
     assert rc == 1
     assert findings[("roads", "consume/raster")]["status"] == "error"
 
@@ -64,12 +61,12 @@ def test_ontology_override_and_service_error(capsys):
 @pytest.mark.parametrize(
     "source,sink,status",
     [
-        ([EDAM + "format_4119"], [EDAM + "format_4126"], "compatible"),  # Shapefile -> vector
-        ([EDAM + "format_4119"], [EDAM + "format_4109"], "incompatible"),
-        ([EDAM + "format_4109", EDAM + "format_4119"], [EDAM + "format_4109"], "incompatible"),  # every source must fit
-        (["$(inputs.f.format)"], [EDAM + "format_4109"], "expression"),
-        ([], [EDAM + "format_4109"], "unannotated"),
-        ([EDAM + "format_9999"], [EDAM + "format_4109"], "unknown-format"),
+        ([EO + "Shapefile"], [EO + "Vector"], "compatible"),  # Shapefile -> Vector
+        ([EO + "Shapefile"], [EO + "GeoTIFF"], "incompatible"),
+        ([EO + "GeoTIFF", EO + "Shapefile"], [EO + "GeoTIFF"], "incompatible"),  # every source must fit
+        (["$(inputs.f.format)"], [EO + "GeoTIFF"], "expression"),
+        ([], [EO + "GeoTIFF"], "unannotated"),
+        ([EO + "GeoTIF"], [EO + "GeoTIFF"], "unknown-format"),
     ],
 )
 def test_pair_rules(source, sink, status):
@@ -98,6 +95,6 @@ def test_any_ontology_may_confirm_compatibility():
     with respx.mock:
         mock_service(per_ontology)
         linter = lint.Linter(FormatServiceClient(SERVICE), ["http://first", "http://second"])
-        finding = linter._check("wf", "#a", Port(EDAM + "format_4119"), "#b", Port(EDAM + "format_4126"))
+        finding = linter._check("wf", "#a", Port(EO + "Shapefile"), "#b", Port(EO + "Vector"))
     assert finding.status == "compatible"
     assert [d["ontology"] for d in finding.details] == ["http://first", "http://second"]

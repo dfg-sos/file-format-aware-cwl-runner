@@ -4,8 +4,8 @@ For every connection (workflow input or step output -> step input, and -> workfl
 source port's format is checked against the sink port's format with the service's
 `/compatibility` endpoint (subclass / equivalence in the ontologies listed in `$schemas`).
 A connection is compatible if every source format is compatible with at least one sink format
-in at least one of the ontologies. Formats that no ontology defines are reported as
-`unknown-format` instead of `incompatible`.
+in at least one of the ontologies. Formats that no ontology defines (service answers 422) are
+reported as `unknown-format` instead of `incompatible`.
 """
 
 from __future__ import annotations
@@ -136,49 +136,41 @@ class Linter:
             finding.status, finding.message = UNANNOTATED, "source declares no format"
             return finding
         for actual in src_fmts:
-            pairs = [(expected, self._compatible(expected, actual, finding)) for expected in sink_fmts]
-            if any(ok for _, ok in pairs):
+            pairs = [self._pair(expected, actual, finding) for expected in sink_fmts]
+            if any(status == COMPATIBLE for status, _ in pairs):
                 continue
-            unknown = [f for f in (actual, *sink_fmts) if self._known(f) is False]
-            if unknown:
-                finding.status = UNKNOWN_FORMAT
-                finding.message = f"not defined in {self.ontology_urls}: {[last_segment(f) for f in unknown]}"
-            elif any(ok is None for _, ok in pairs):
-                finding.status = ERROR
-                finding.message = next(d["message"] for d in finding.details if d["compatible"] is None)
-            else:
-                finding.status = INCOMPATIBLE
-                finding.message = (
-                    f"{last_segment(actual)} is not a subclass of any of {[last_segment(f) for f in sink_fmts]}"
-                )
+            # Report the most informative reason: an unknown format (typo, wrong ontology) explains the
+            # rest; a service error means compatibility could not be decided.
+            for status in (UNKNOWN_FORMAT, ERROR, INCOMPATIBLE):
+                messages = [message for s, message in pairs if s == status]
+                if messages:
+                    finding.status, finding.message = status, "; ".join(dict.fromkeys(messages))
+                    break
             return finding
         return finding
 
-    def _compatible(self, expected: str, actual: str, finding: Finding) -> bool | None:
-        """True if any ontology says compatible; None if none could answer."""
-        answers = []
+    def _pair(self, expected: str, actual: str, finding: Finding) -> tuple[str, str]:
+        """Status of one (sink format, source format) pair over all ontologies.
+
+        Compatible if any ontology says so; incompatible if an ontology defines both formats but
+        does not relate them; unknown-format only if every ontology lacks one of them.
+        """
+        results = []
         for url in self.ontology_urls:
             r = self.client.compatibility(expected, actual, url)
             finding.details.append(
-                {
-                    "actual": actual,
-                    "expected": expected,
-                    "ontology": url,
-                    "compatible": r.compatible,
-                    "message": r.message,
-                }
+                {"actual": actual, "expected": expected, "ontology": url, "compatible": r.compatible}
+                | ({"unknown_formats": r.unknown_formats} if r.unknown_formats else {"message": r.message})
             )
             if r.compatible:
-                return True
-            answers.append(r.compatible)
-        return False if any(a is False for a in answers) else None
-
-    def _known(self, fmt: str) -> bool | None:
-        """Whether any ontology defines the format (False only if every ontology answered no)."""
-        answers = [self.client.format_known(fmt, url) for url in self.ontology_urls]
-        if any(answers):
-            return True
-        return False if answers and all(a is False for a in answers) else None
+                return COMPATIBLE, ""
+            results.append(r)
+        if any(r.compatible is False for r in results):
+            return INCOMPATIBLE, f"{last_segment(actual)} is not {last_segment(expected)} or a subclass of it"
+        if results and all(r.unknown_formats for r in results):
+            unknown = dict.fromkeys(last_segment(f) for r in results for f in r.unknown_formats)
+            return UNKNOWN_FORMAT, f"not defined in {self.ontology_urls}: {list(unknown)}"
+        return ERROR, next((r.message for r in results if not r.unknown_formats), "no ontology given")
 
 
 def _as_list(value: Any) -> list[str]:

@@ -1,7 +1,7 @@
 """CWL extension fields for `full` mode: expected CRS and geometry type on a File port.
 
 Declare in a CWL document:
-    $namespaces: {sos: "https://w3id.org/sos/cwl#"}
+    $namespaces: {sos: "https://dfg-sos.github.io/ontologies/cwl#"}
     ...
     outputs:
       roads: {type: File, format: edam:format_4119, sos:expectedCRS: "EPSG:4326", sos:expectedGeometryType: LineString}
@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-SOS_NAMESPACE = "https://w3id.org/sos/cwl#"
+SOS_NAMESPACE = "https://dfg-sos.github.io/ontologies/cwl#"
 EXPECTED_CRS = SOS_NAMESPACE + "expectedCRS"
 EXPECTED_GEOMETRY_TYPE = SOS_NAMESPACE + "expectedGeometryType"
 

@@ -14,7 +14,7 @@ The throwaway spike code has been removed. Each finding below is covered by a te
 | Post-check by wrapping `j.collect_outputs` sees the stamped `format` | yes. `location` is `file://` on the host |
 | Raising `WorkflowException` in the wrapper | job, step and workflow end `permanentFail` with our message |
 | Step label | `j.name` (`produce`, `consume`); `runtimeContext.part_of` = `step <name>` |
-| Namespaced port extension `sos:expectedCRS` | kept on `tool["outputs"][i]` under `https://w3id.org/sos/cwl#expectedCRS` |
+| Namespaced port extension `sos:expectedCRS` | kept on `tool["outputs"][i]` under `https://dfg-sos.github.io/ontologies/cwl#expectedCRS` |
 | Main-command timing | patching `cwltool.job._job_popen` works; it receives `name=j.name`, so each timing is tied to its job |
 | Mislabelled output (GeoJSON content stamped as GeoTIFF) | passes vanilla checks downstream (fixture A premise holds) |
 
@@ -25,7 +25,7 @@ The throwaway spike code has been removed. Each finding below is covered by a te
   steps `main_duration_ms` includes container start-up. Note this in the paper.
 
 ## Service check on the spike output
-A GeoJSON payload named `out.tif` and labelled GeoTIFF (`format_4109`, fixture A2):
+A GeoJSON payload named `out.tif` and labelled `eo:GeoTIFF` (fixture A2):
 - `basic`: SUCCESS (extension only).
 - `full`: FAILURE, cause `file_open_error` (RasterIO cannot open it).
 
