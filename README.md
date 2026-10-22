@@ -15,7 +15,27 @@ How it hooks into cwltool: [docs/cwltool-hook-points.md](docs/cwltool-hook-point
 ## Setup
 ```sh
 uv sync
-cd ../sos-file-format-service && docker compose up -d --build   # API :8000, ontology :8080
+docker run -d --name sos-ffs -p 8000:8000 \
+  -v "$PWD/tests/fixtures/mappings:/app/mappings:ro" \
+  ghcr.io/dfg-sos/file-format-service:latest   # API on :8000
+```
+The service ships no ontology or format mappings. `tests/fixtures/mappings/eo-formats.json` maps
+the EO formats ontology's classes to the validator's formats; without a mapping, `/validate`
+rejects every format.
+Formats come from the standalone EO formats ontology published at
+[dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/) (namespace
+`https://dfg-sos.github.io/ontologies/eo-formats#`, readable names like `GeoTIFF`, `Shapefile`,
+`Vector`). The `sos:` extension fields are documented there as well. Workflows declare it like this:
+```yaml
+$namespaces: {eo: "https://dfg-sos.github.io/ontologies/eo-formats#"}
+$schemas: [https://dfg-sos.github.io/ontologies/eo-formats.owl]
+```
+
+To let the service read files in place instead of receiving uploads, share the directories that
+hold the workflow's inputs and cwltool's working directories with the service. Mount them under the
+same path and list them in `SOS_FFS_SHARED_DIRS`:
+```sh
+docker run ... -v /data/runs:/data/runs:ro -e SOS_FFS_SHARED_DIRS=/data/runs ...
 ```
 
 ## Runtime validation
@@ -31,6 +51,7 @@ uv run cwl-format-aware-runner --format-validation-mode full tests/fixtures/a_re
 | `--format-check both\|pre\|post` | `both` | validate step inputs, outputs or both |
 | `--format-uncertain warn\|fail` | `warn` | handling of an `UNCERTAIN` result (e.g. formats without a validator) |
 | `--format-service-error warn\|fail` | `fail` | service unreachable or request rejected (e.g. unmapped format) |
+| `--format-transfer auto\|local\|upload` | `auto` | how files reach the service: `local` sends paths (`/validate/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them |
 | `--format-service-timeout` | `300` | seconds per request |
 | `--format-timing-log FILE.jsonl` | none | instrumentation, see below |
 | `--format-run-id` | random | run id in the timing log |
@@ -40,27 +61,31 @@ Semantics:
   logged as `skip`. Arrays, records, scatter and secondaryFiles are walked, with one check per File.
 - **What a file is checked against.** Its own `format` label. For outputs, cwltool has already
   evaluated any `format` expression into a concrete label. For inputs, cwltool has already checked
-  that the label fits the port, so a GeoTIFF fed into a `raster` port is validated as GeoTIFF.
+  that the label fits the port, so a GeoTIFF fed into a `Raster` port is validated as GeoTIFF.
 - **Shapefiles.** The `.shp` is the primary file and its `secondaryFiles` (`.shx`, `.dbf`, `.prj`)
-  are uploaded with it.
-- **Files outside the local filesystem.** Remote (`http(s)`) File locations are fetched and
-  uploaded. The service has no by-reference mode yet, so every file is uploaded, even when the
-  service could read it directly (open issue in sos-file-format-service).
+  are sent with it.
+- **How files reach the service.**
+  - Local files are sent by path. If the service has local validation disabled, or the path lies
+    outside its shared directories, `auto` uploads the file instead. A "disabled" answer is
+    remembered for the rest of the run.
+  - Outputs live in cwltool's temporary output directories. Put those inside a shared directory
+    with `--tmp-outdir-prefix` (and `--tmpdir-prefix`), otherwise outputs are uploaded.
+  - Remote (`http(s)`) File locations are fetched and uploaded.
 - **What a failure does.** A failed pre-check marks the step `permanentFail` without running it. A
   failed post-check fails the step after it ran.
 - **Not checked.** Cached steps (`--cachedir` hits) and ExpressionTools.
 - **`full` mode extensions.** Ports can declare the CRS and geometry type the file must have:
   ```yaml
-  $namespaces: {sos: "https://w3id.org/sos/cwl#"}
+  $namespaces: {sos: "https://dfg-sos.github.io/ontologies/cwl#"}
   outputs:
-    roads: {type: File, format: edam:format_4106, sos:expectedCRS: "EPSG:4326", sos:expectedGeometryType: LineString}
+    roads: {type: File, format: eo:GeoJSON, sos:expectedCRS: "EPSG:4326", sos:expectedGeometryType: LineString}
   ```
 
 ### Timing log (JSONL, one object per line, all with `record` and `run_id`)
 | `record` | Fields |
 |---|---|
 | `run` | versions (cwltool, cwl-utils, schema-salad, this package, httpx), python, host, platform, cpu_count, service_url, flags |
-| `check` | step, job, port, direction (`pre`/`post`), file, size_bytes, format, mode, result, message, t_start, t_end (ns, monotonic), duration_ms |
+| `check` | step, job, port, direction (`pre`/`post`), file, size_bytes, format, mode, result, message, transfer (`local`/`upload`), server_timing (the service's `Server-Timing` durations in ms, e.g. `receive`/`resolve`, `validate`), t_start, t_end (ns, monotonic), duration_ms (client round trip) |
 | `main` | step, job, main_duration_ms: the tool's command (for containers including `docker run` start-up) |
 | `skip` | step, job, port, direction, file, reason |
 | `cached` | step |
@@ -69,7 +94,7 @@ Semantics:
 
 ## Design-time linter
 ```sh
-uv run cwl-format-lint --format-ontology-url http://ontology/edam_eo.owl tests/fixtures/d_shapefile_to_geotiff.cwl
+uv run cwl-format-lint tests/fixtures/d_shapefile_to_geotiff.cwl
 uv run cwl-format-lint --json ...   # machine-readable
 ```
 Every connection (workflow input or step output → step input or workflow output, nested workflows
@@ -77,8 +102,8 @@ included) is checked with `/compatibility`. A connection is compatible if every 
 compatible with at least one sink format, in at least one of the ontologies.
 
 Other statuses:
-- `unknown-format`: a format that no ontology defines, checked via `/format-info`. Without this
-  check it would look like `incompatible`.
+- `unknown-format`: a format that no ontology defines (the service answers 422), e.g. a typo or
+  the wrong ontology.
 - `expression`: the format is an expression; skipped.
 - `unannotated`: the port has no `format`. `--strict` makes these fail the lint.
 
@@ -86,19 +111,17 @@ Exit code 1 on `incompatible`, `unknown-format` or service `error`.
 
 The ontologies are all of the document's `$schemas` entries, or the repeatable
 `--format-ontology-url`. The **service** fetches them, so they must be reachable from the service.
-With the docker-compose setup, `localhost:8080` is not reachable from inside the API container, so
-pass `--format-ontology-url http://ontology/edam_eo.owl`.
+Use `--format-ontology-url file:///ontology/eo-formats.owl` for a copy mounted into the service.
 
-Online ontologies work. The official EDAM (`http://edamontology.org/EDAM.owl`, also versioned
-`EDAM_1.25.owl`) takes about 4 s to fetch and parse the first time, then the service caches it.
-It contains no EO formats (GeoTIFF, GeoJSON, Shapefile, …; only `TIFF` format_3591 and `NetCDF`
-format_3650). The EO IDs `format_4100`–`format_4126` exist only in the service's adapted ontology
-and are reported as `unknown-format` against official EDAM (fixture F).
+Other online ontologies work too. The official EDAM (`http://edamontology.org/EDAM.owl`) takes
+about 4 s to fetch and parse the first time, then the service caches it. It contains no EO
+formats, so `eo:` formats checked against EDAM alone are `unknown-format` (fixture F).
 
 ## Tests
 ```sh
 uv run pytest              # unit tests, service mocked
-uv run pytest -m service   # acceptance tests against the running service (fixtures A–E)
+uv run pytest -m service   # acceptance tests against the running service (fixtures A–F)
+SOS_FFS_TEST_SHARED_DIR=/path/shared/with/service uv run pytest -m service   # also tests by-path validation
 ```
 Fixtures in `tests/fixtures/`:
 
@@ -108,9 +131,9 @@ Fixtures in `tests/fixtures/`:
 | A, container | `a_relabel_docker.cwl`: the same run in Docker; skipped without Docker |
 | B | wrong CRS |
 | C | wrong geometry type |
-| D | Shapefile → GeoTIFF (incompatible) / → vector (compatible), linter |
+| D | Shapefile → GeoTIFF (incompatible) / → Vector (compatible), linter |
 | E | unannotated ports are skipped |
-| F | the official online EDAM, linter |
+| F | the official online EDAM (EO formats are unknown there), linter |
 
 Data is generated by `tests/fixtures/make_data.py`.
 
@@ -118,7 +141,12 @@ Data is generated by `tests/fixtures/make_data.py`.
 ```sh
 ../sos-file-format-service/.venv/bin/python bench/make_inputs.py 1 10 100   # GeoTIFF inputs
 uv run python bench/run.py bench/raster_chain.cwl bench/inputs/raster_10MB.yml --repeat 10
+# upload vs. by-path (inputs and --tmp-outdir-prefix inside the service's shared dirs):
+uv run python bench/run.py ... --transfers upload,local --tmp-outdir-prefix /shared/tmp/
 ```
-Each repetition runs a fresh process per mode (`off`, `basic`, `structural`, `full`; validation in
-`warn`), with the modes interleaved. Results go to `bench/results/<timestamp>/` as `timing.jsonl`
-and `runs.csv` (wall time, exit code, summed check and main-command time per run).
+Each repetition runs a fresh process per variant: `off`, plus each mode (`basic`, `structural`,
+`full`) combined with each transfer, with validation in `warn`. The variants are interleaved.
+Results go to `bench/results/<timestamp>/`:
+- `timing.jsonl`: every log record;
+- `runs.csv`: per run the wall time, exit code, and summed check, service-side validation and
+  main-command time.
