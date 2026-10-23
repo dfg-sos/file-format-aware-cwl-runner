@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cwl-format-aware-runner = "format_aware_cwl.cli:main"
+cwl-format-aware-runner = "format_aware_cwl.runner:main"
 cwl-format-lint = "format_aware_cwl.lint:main"
 
 [dependency-groups]
@@ -27,8 +27,8 @@ packages = ["src/format_aware_cwl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["service: needs a running SOS File Format Service (SOS_FFS_URL)"]
-addopts = "-m 'not service'"
+markers = ["integration: needs a running SOS File Format Service (SOS_FFS_URL)"]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 120

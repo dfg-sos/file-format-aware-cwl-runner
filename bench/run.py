@@ -56,7 +56,7 @@ def main() -> int:
             cmd = [
                 sys.executable,
                 "-m",
-                "format_aware_cwl.cli",
+                "format_aware_cwl.runner",
                 "--quiet",
                 "--format-service-url",
                 args.service_url,

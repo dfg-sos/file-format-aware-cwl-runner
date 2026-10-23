@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from format_aware_cwl import cli
+from format_aware_cwl import runner
 
 CWL = Path(__file__).parent / "cwl"
 SERVICE = "http://ffs.test"
@@ -20,7 +20,7 @@ def run(tmp_path, *argv, status="FAILURE"):
         route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate/(basic|structural|full)(/local)?$").mock(
             return_value=httpx.Response(200, json={"status": status, "errors": [{"message": "not a GeoTIFF"}]})
         )
-        rc = cli.main(
+        rc = runner.main(
             [
                 "--quiet",
                 "--no-container",
