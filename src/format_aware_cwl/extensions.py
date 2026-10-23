@@ -29,3 +29,9 @@ def expected_crs(port: Mapping[str, Any]) -> str | None:
 
 def expected_geometry_type(port: Mapping[str, Any]) -> str | None:
     return _get(port, EXPECTED_GEOMETRY_TYPE)
+
+
+def expected_metadata(port: Mapping[str, Any]) -> dict[str, str]:
+    """The port's extension fields as the service's `expected_metadata` keys (only those set)."""
+    values = {"crs": expected_crs(port), "geometry_type": expected_geometry_type(port)}
+    return {key: value for key, value in values.items() if value}

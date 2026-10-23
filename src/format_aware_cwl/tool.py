@@ -67,17 +67,14 @@ class Validator:
                 )
                 continue
             ref = to_ref(f, resolve)
-            crs = geom = None
-            if self.policy.mode == "full":
-                crs, geom = extensions.expected_crs(port), extensions.expected_geometry_type(port)
+            metadata = extensions.expected_metadata(port) if self.policy.mode == "full" else None
             t_start = now_ns()
             result = self.client.validate(
                 ref,
                 str(fmt),
                 mode=self.policy.mode,
                 secondaries=secondary_refs(f, resolve),
-                expected_crs=crs,
-                expected_geometry_type=geom,
+                expected_metadata=metadata,
             )
             t_end = now_ns()
             self.log.write(

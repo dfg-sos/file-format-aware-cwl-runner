@@ -20,8 +20,9 @@ docker run -d --name sos-ffs -p 8000:8000 \
   ghcr.io/dfg-sos/file-format-service:latest   # API on :8000
 ```
 The service ships no ontology or format mappings. `tests/fixtures/mappings/eo-formats.json` maps
-the EO formats ontology's classes to the validator's formats; without a mapping, `/validate`
-rejects every format.
+the EO formats ontology's classes to the validator's format IDs; without a mapping, validation
+rejects every format. Formats without a validator (EsriJSON, GeoZarr, OSM_JSON, OSM_XML, PBF, VRT,
+WKB, XDMF) are not mapped.
 Formats come from the standalone EO formats ontology published at
 [dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/) (namespace
 `https://dfg-sos.github.io/ontologies/eo-formats#`, readable names like `GeoTIFF`, `Shapefile`,
@@ -47,11 +48,11 @@ uv run cwl-format-aware-runner --format-validation-mode full tests/fixtures/a_re
 |---|---|---|
 | `--format-service-url` | `$SOS_FFS_URL` or `http://localhost:8000` | service base URL |
 | `--format-validation off\|warn\|fail` | `fail` | `off` = plain cwltool (baseline); `warn` logs only; `fail` ends the step `permanentFail` |
-| `--format-validation-mode basic\|structural\|full` | `basic` | service depth: extension / files present / open file, CRS, geometry |
+| `--format-validation-mode basic\|structural\|full` | `basic` | service depth: `basic` checks the file names only (extensions, multi-file components), `structural` also that the files exist, `full` also that they open as the format, plus CRS and geometry |
 | `--format-check both\|pre\|post` | `both` | validate step inputs, outputs or both |
-| `--format-uncertain warn\|fail` | `warn` | handling of an `UNCERTAIN` result (e.g. formats without a validator) |
+| `--format-uncertain warn\|fail` | `warn` | handling of an `UNCERTAIN` result, including formats the service cannot validate (not mapped, no validator) |
 | `--format-service-error warn\|fail` | `fail` | service unreachable or request rejected (e.g. unmapped format) |
-| `--format-transfer auto\|local\|upload` | `auto` | how files reach the service: `local` sends paths (`/validate/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them |
+| `--format-file-transfer auto\|local\|upload` | `auto` | how files reach the service in `structural`/`full` mode: `local` sends paths (`/validate/<mode>/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them. In `basic` mode no files are transferred, only their paths are sent. |
 | `--format-service-timeout` | `300` | seconds per request |
 | `--format-timing-log FILE.jsonl` | none | instrumentation, see below |
 | `--format-run-id` | random | run id in the timing log |
@@ -65,7 +66,9 @@ Semantics:
 - **Shapefiles.** The `.shp` is the primary file and its `secondaryFiles` (`.shx`, `.dbf`, `.prj`)
   are sent with it.
 - **How files reach the service.**
-  - Local files are sent by path. If the service has local validation disabled, or the path lies
+  - In `basic` mode only the file names are sent (`/validate/basic`), so nothing is transferred and
+    no shared directories are needed.
+  - In `structural` and `full` mode, local files are sent by path. If the service has local validation disabled, or the path lies
     outside its shared directories, `auto` uploads the file instead. A "disabled" answer is
     remembered for the rest of the run.
   - Outputs live in cwltool's temporary output directories. Put those inside a shared directory
@@ -73,6 +76,9 @@ Semantics:
   - Remote (`http(s)`) File locations are fetched and uploaded.
 - **What a failure does.** A failed pre-check marks the step `permanentFail` without running it. A
   failed post-check fails the step after it ran.
+- **Service rejections.** A format the service cannot validate counts as `UNCERTAIN`
+  (`--format-uncertain`). Invalid `sos:` metadata (e.g. `sos:expectedGeometryType` on a raster, or an
+  unknown CRS) counts as an error (`--format-service-error`), because the workflow annotation is wrong.
 - **Not checked.** Cached steps (`--cachedir` hits) and ExpressionTools.
 - **`full` mode extensions.** Ports can declare the CRS and geometry type the file must have:
   ```yaml
@@ -85,7 +91,7 @@ Semantics:
 | `record` | Fields |
 |---|---|
 | `run` | versions (cwltool, cwl-utils, schema-salad, this package, httpx), python, host, platform, cpu_count, service_url, flags |
-| `check` | step, job, port, direction (`pre`/`post`), file, size_bytes, format, mode, result, message, transfer (`local`/`upload`), server_timing (the service's `Server-Timing` durations in ms, e.g. `receive`/`resolve`, `validate`), t_start, t_end (ns, monotonic), duration_ms (client round trip) |
+| `check` | step, job, port, direction (`pre`/`post`), file, size_bytes, format, mode, result, message, transfer (`local`/`upload`; `null` in basic mode, where no file is sent), server_timing (the service's `Server-Timing` durations in ms, e.g. `receive`/`resolve`, `validate`), t_start, t_end (ns, monotonic), duration_ms (client round trip) |
 | `main` | step, job, main_duration_ms: the tool's command (for containers including `docker run` start-up) |
 | `skip` | step, job, port, direction, file, reason |
 | `cached` | step |
@@ -144,8 +150,8 @@ uv run python bench/run.py bench/raster_chain.cwl bench/inputs/raster_10MB.yml -
 # upload vs. by-path (inputs and --tmp-outdir-prefix inside the service's shared dirs):
 uv run python bench/run.py ... --transfers upload,local --tmp-outdir-prefix /shared/tmp/
 ```
-Each repetition runs a fresh process per variant: `off`, plus each mode (`basic`, `structural`,
-`full`) combined with each transfer, with validation in `warn`. The variants are interleaved.
+Each repetition runs a fresh process per variant: `off`, `basic` (no file transfer), and `structural` and
+`full` combined with each transfer, with validation in `warn`. The variants are interleaved.
 Results go to `bench/results/<timestamp>/`:
 - `timing.jsonl`: every log record;
 - `runs.csv`: per run the wall time, exit code, and summed check, service-side validation and

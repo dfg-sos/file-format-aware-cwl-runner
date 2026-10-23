@@ -35,7 +35,12 @@ class Policy:
 
 def describe(step: str, port: str, direction: str, basename: str, fmt: str, result: ValidationResult) -> str:
     where = "input" if direction == "pre" else "output"
+    verdict = {
+        FAILURE: "is not valid",
+        UNCERTAIN: "could not be confirmed as",
+        ERROR: "could not be validated as",
+    }.get(result.status, "is not valid")
     return (
-        f"[step {step}] {where} '{port}' file '{basename}' is not valid {fmt}: "
+        f"[step {step}] {where} '{port}' file '{basename}' {verdict} {fmt}: "
         f"{result.status}{': ' + result.message if result.message else ''}"
     )

@@ -21,9 +21,15 @@ from format_aware_cwl.timing import TimingLog
 BASE = "http://ffs.test"
 EO = "https://dfg-sos.github.io/ontologies/eo-formats#"
 GEOTIFF = EO + "GeoTIFF"
-UPLOAD = f"{BASE}/api/v1/validate"
-LOCAL = f"{BASE}/api/v1/validate/local"
 OK = {"status": "SUCCESS", "errors": [], "warnings": [], "infos": []}
+
+
+def upload(mode):
+    return f"{BASE}/api/v1/validate/{mode}"
+
+
+def local(mode):
+    return f"{BASE}/api/v1/validate/{mode}/local"
 
 
 @pytest.fixture
@@ -78,16 +84,48 @@ def test_parse_server_timing():
     assert parse_server_timing("cache;desc=x, bad;dur=n/a") == {}
 
 
-# --- local (by path) ---------------------------------------------------------------------------
+def test_unknown_mode_is_error(client, tif):
+    assert client.validate(tif, GEOTIFF, mode="deep").status == ERROR
+
+
+# --- basic: paths only, no file transfer --------------------------------------------------------------------------
 
 
 @respx.mock
-def test_validate_local_sends_paths(client, tmp_path):
+def test_basic_sends_only_paths(uploader, tmp_path):
+    refs = [FileRef(str(tmp_path / f"roads.{e}"), f"roads.{e}") for e in ("shp", "shx")]  # files need not exist
+    route = respx.post(upload("basic")).mock(
+        return_value=httpx.Response(200, json=OK, headers={"Server-Timing": "validate;dur=0.2"})
+    )
+    result = uploader.validate(refs[0], EO + "Shapefile", secondaries=refs[1:], expected_metadata={"crs": "x"})
+    assert (result.status, result.transfer, result.server_timing) == (SUCCESS, None, {"validate": 0.2})
+    assert json.loads(route.calls.last.request.content) == {  # no metadata outside full mode
+        "ontology_namespace": EO,
+        "format_identifier": "Shapefile",
+        "file_path": str(tmp_path / "roads.shp"),
+        "secondary_file_paths": [str(tmp_path / "roads.shx")],
+    }
+
+
+@respx.mock
+def test_basic_remote_file_sends_url_path(client):
+    route = respx.post(upload("basic")).mock(return_value=httpx.Response(200, json=OK))
+    client.validate(FileRef("https://data.test/a/out.tif", "out.tif"), GEOTIFF)
+    assert json.loads(route.calls.last.request.content)["file_path"] == "/a/out.tif"
+
+
+# --- structural / full by path --------------------------------------------------------------------
+
+
+@respx.mock
+def test_full_local_sends_paths_and_metadata(client, tmp_path):
     refs = shapefile(tmp_path)
-    route = respx.post(LOCAL).mock(
+    route = respx.post(local("full")).mock(
         return_value=httpx.Response(200, json=OK, headers={"Server-Timing": "resolve;dur=0.1, validate;dur=5.5"})
     )
-    result = client.validate(refs[0], EO + "Shapefile", mode="full", secondaries=refs[1:], expected_crs="EPSG:4326")
+    result = client.validate(
+        refs[0], EO + "Shapefile", mode="full", secondaries=refs[1:], expected_metadata={"crs": "EPSG:4326", "x": ""}
+    )
     assert (result.status, result.transfer, result.server_timing) == (
         SUCCESS,
         "local",
@@ -96,8 +134,7 @@ def test_validate_local_sends_paths(client, tmp_path):
     assert json.loads(route.calls.last.request.content) == {
         "ontology_namespace": EO,
         "format_identifier": "Shapefile",
-        "mode": "full",
-        "expected_crs": "EPSG:4326",
+        "expected_metadata": {"crs": "EPSG:4326"},
         "file_path": str(tmp_path / "roads.shp"),
         "secondary_file_paths": [str(tmp_path / f"roads.{e}") for e in ("shx", "dbf", "prj")],
     }
@@ -105,90 +142,98 @@ def test_validate_local_sends_paths(client, tmp_path):
 
 @respx.mock
 def test_auto_falls_back_to_upload_outside_shared_dirs(client, tif):
-    local = respx.post(LOCAL).mock(return_value=httpx.Response(403, json={"detail": "outside shared directories"}))
-    upload = respx.post(UPLOAD).mock(return_value=httpx.Response(200, json=OK))
+    by_path = respx.post(local("structural")).mock(return_value=httpx.Response(403, json={"detail": "outside"}))
+    uploaded = respx.post(upload("structural")).mock(return_value=httpx.Response(200, json=OK))
     for _ in range(2):
-        assert client.validate(tif, GEOTIFF).transfer == "upload"
-    assert (local.call_count, upload.call_count) == (2, 2)  # other paths may still be shared
+        assert client.validate(tif, GEOTIFF, mode="structural").transfer == "upload"
+    assert (by_path.call_count, uploaded.call_count) == (2, 2)  # other paths may still be shared
 
 
 @respx.mock
 def test_auto_remembers_disabled_local_validation(client, tif):
     detail = {"detail": "Local validation is disabled: no shared directories configured"}
-    local = respx.post(LOCAL).mock(return_value=httpx.Response(403, json=detail))
-    respx.post(UPLOAD).mock(return_value=httpx.Response(200, json=OK))
+    by_path = respx.post(local("structural")).mock(return_value=httpx.Response(403, json=detail))
+    respx.post(upload("structural")).mock(return_value=httpx.Response(200, json=OK))
     for _ in range(3):
-        assert client.validate(tif, GEOTIFF).status == SUCCESS
-    assert local.call_count == 1
+        assert client.validate(tif, GEOTIFF, mode="structural").status == SUCCESS
+    assert by_path.call_count == 1
 
 
 @respx.mock
 def test_forced_local_does_not_fall_back(tif):
-    respx.post(LOCAL).mock(return_value=httpx.Response(403, json={"detail": "disabled"}))
-    upload = respx.post(UPLOAD)
-    result = FormatServiceClient(BASE, transfer="local").validate(tif, GEOTIFF)
+    respx.post(local("full")).mock(return_value=httpx.Response(403, json={"detail": "disabled"}))
+    uploaded = respx.post(upload("full"))
+    result = FormatServiceClient(BASE, transfer="local").validate(tif, GEOTIFF, mode="full")
     assert (result.status, result.transfer) == (ERROR, "local")
-    assert upload.call_count == 0
+    assert uploaded.call_count == 0
 
 
 @respx.mock
 def test_auto_uploads_remote_files_directly(client):
     respx.get("https://data.test/a/out.tif").mock(return_value=httpx.Response(200, content=b"REMOTE"))
-    route = respx.post(UPLOAD).mock(return_value=httpx.Response(200, json=OK))
-    local = respx.post(LOCAL)
-    client.validate(FileRef("https://data.test/a/out.tif", "out.tif"), GEOTIFF)
+    route = respx.post(upload("full")).mock(return_value=httpx.Response(200, json=OK))
+    by_path = respx.post(local("full"))
+    client.validate(FileRef("https://data.test/a/out.tif", "out.tif"), GEOTIFF, mode="full")
     assert b"REMOTE" in route.calls.last.request.content
-    assert local.call_count == 0
+    assert by_path.call_count == 0
 
 
-# --- upload ------------------------------------------------------------------------------------
+# --- structural / full upload --------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("status", ["SUCCESS", "FAILURE", "UNCERTAIN", "success"])
 @respx.mock
 def test_upload_statuses_and_fields(uploader, tif, status):
-    route = respx.post(UPLOAD).mock(
+    route = respx.post(upload("full")).mock(
         return_value=httpx.Response(
             200,
             json={**OK, "status": status, "errors": [{"message": "boom"}]},
             headers={"Server-Timing": "receive;dur=2"},
         )
     )
-    result = uploader.validate(tif, GEOTIFF, mode="full", expected_crs="EPSG:4326")
+    result = uploader.validate(tif, GEOTIFF, mode="full", expected_metadata={"crs": "EPSG:4326"})
     assert (result.status, result.transfer, result.server_timing) == (status.upper(), "upload", {"receive": 2.0})
     body = route.calls.last.request.content
     assert b'name="format_identifier"\r\n\r\nGeoTIFF' in body
     assert b'name="ontology_namespace"\r\n\r\nhttps://dfg-sos.github.io/ontologies/eo-formats#' in body
-    assert b'name="mode"\r\n\r\nfull' in body
-    assert b'name="expected_crs"\r\n\r\nEPSG:4326' in body
+    assert b'name="expected_metadata"\r\n\r\n{"crs": "EPSG:4326"}' in body
     assert b'filename="out.tif"' in body
-    assert b"expected_geometry_type" not in body
+    assert b'name="mode"' not in body
 
 
 @respx.mock
 def test_upload_shapefile_sends_secondaries(uploader, tmp_path):
     refs = shapefile(tmp_path)
-    route = respx.post(UPLOAD).mock(return_value=httpx.Response(200, json=OK))
-    uploader.validate(refs[0], EO + "Shapefile", secondaries=refs[1:])
+    route = respx.post(upload("structural")).mock(return_value=httpx.Response(200, json=OK))
+    uploader.validate(refs[0], EO + "Shapefile", mode="structural", secondaries=refs[1:])
     body = route.calls.last.request.content
     assert body.count(b'name="secondary_files"') == 3
     assert b'name="file"; filename="roads.shp"' in body
+    assert b"expected_metadata" not in body
 
 
+@pytest.mark.parametrize(
+    "detail,status",
+    [
+        ("Format identifier 'GeoZarr' not supported for ontology namespace 'x'", UNCERTAIN),  # no validator
+        ("Unsupported metadata keys ['geometry_type'], supported keys are ['crs'].", ERROR),  # workflow annotation
+        ("Invalid projection: EPSG:99999999", ERROR),
+    ],
+)
 @respx.mock
-def test_http_400_is_error(uploader, tif):
-    respx.post(UPLOAD).mock(return_value=httpx.Response(400, json={"detail": "unmapped format"}))
-    result = uploader.validate(tif, GEOTIFF)
-    assert result.status == ERROR
-    assert "unmapped format" in result.message
+def test_http_400(uploader, tif, detail, status):
+    respx.post(upload("full")).mock(return_value=httpx.Response(400, json={"detail": detail}))
+    result = uploader.validate(tif, GEOTIFF, mode="full")
+    assert result.status == status
+    assert detail[:20] in result.message
 
 
 @pytest.mark.parametrize("transfer", ["upload", "local"])
 @respx.mock
 def test_service_down(tif, transfer):
-    respx.post(UPLOAD).mock(side_effect=httpx.ConnectError("refused"))
-    respx.post(LOCAL).mock(side_effect=httpx.ConnectError("refused"))
-    assert FormatServiceClient(BASE, transfer=transfer).validate(tif, GEOTIFF).status == ERROR
+    respx.post(upload("full")).mock(side_effect=httpx.ConnectError("refused"))
+    respx.post(local("full")).mock(side_effect=httpx.ConnectError("refused"))
+    assert FormatServiceClient(BASE, transfer=transfer).validate(tif, GEOTIFF, mode="full").status == ERROR
 
 
 # --- compatibility -----------------------------------------------------------------------------

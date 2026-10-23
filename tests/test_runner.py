@@ -16,8 +16,8 @@ SERVICE = "http://ffs.test"
 def run(tmp_path, *argv, status="FAILURE"):
     log = tmp_path / "t.jsonl"
     with respx.mock(assert_all_called=False) as mock:
-        # one route for both /validate (upload) and /validate/local (by path)
-        route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate(/local)?$").mock(
+        # one route for every validation endpoint: /validate/<mode> and /validate/<mode>/local
+        route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate/(basic|structural|full)(/local)?$").mock(
             return_value=httpx.Response(200, json={"status": status, "errors": [{"message": "not a GeoTIFF"}]})
         )
         rc = cli.main(
@@ -73,7 +73,15 @@ def test_pre_check_failure_skips_command(tmp_path):
     bad.write_text("{}")
     job = tmp_path / "job.json"
     job.write_text(
-        json.dumps({"raster": {"class": "File", "path": str(bad), "format": "https://dfg-sos.github.io/ontologies/eo-formats#GeoTIFF"}})
+        json.dumps(
+            {
+                "raster": {
+                    "class": "File",
+                    "path": str(bad),
+                    "format": "https://dfg-sos.github.io/ontologies/eo-formats#GeoTIFF",
+                }
+            }
+        )
     )
     rc, _, records = run(tmp_path, str(CWL / "wf_in.cwl"), str(job))
     assert rc == 1
@@ -83,8 +91,8 @@ def test_pre_check_failure_skips_command(tmp_path):
 def test_full_mode_sends_extension_fields(tmp_path):
     _, route, _ = run(tmp_path, "--format-validation-mode", "full", str(CWL / "produce.cwl"))
     request = route.calls.last.request
-    assert request.url.path == "/api/v1/validate/local"  # host files are sent by path
-    assert json.loads(request.content)["expected_crs"] == "EPSG:4326"
+    assert request.url.path == "/api/v1/validate/full/local"  # host files are sent by path
+    assert json.loads(request.content)["expected_metadata"] == {"crs": "EPSG:4326"}
 
 
 def test_unannotated_ports_are_skipped(tmp_path):
@@ -99,7 +107,14 @@ def test_off_is_plain_cwltool(tmp_path):
     assert by_type(records, "check") == [] and len(by_type(records, "main")) == 2
 
 
+def test_basic_mode_transfers_no_files(tmp_path):
+    _, route, records = run(tmp_path, "--format-validation", "warn", str(CWL / "wf.cwl"))
+    assert {c["transfer"] for c in by_type(records, "check")} == {None}
+    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate/basic"}
+
+
 def test_upload_transfer_is_logged(tmp_path):
-    _, route, records = run(tmp_path, "--format-validation", "warn", "--format-transfer", "upload", str(CWL / "wf.cwl"))
+    argv = ["--format-validation", "warn", "--format-validation-mode", "structural", "--format-file-transfer", "upload"]
+    _, route, records = run(tmp_path, *argv, str(CWL / "wf.cwl"))
     assert {c["transfer"] for c in by_type(records, "check")} == {"upload"}
-    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate"}
+    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate/structural"}

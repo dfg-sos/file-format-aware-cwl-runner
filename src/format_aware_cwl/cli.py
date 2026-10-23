@@ -56,7 +56,7 @@ def add_format_arguments(parser: argparse.ArgumentParser) -> None:
         help="When the service is unreachable or rejects a request (default: fail).",
     )
     g.add_argument(
-        "--format-transfer",
+        "--format-file-transfer",
         choices=["auto", "local", "upload"],
         default="auto",
         help="How files reach the service: local = by path (/validate/local, needs SOS_FFS_SHARED_DIRS on the "
@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     directions = {"both": {PRE, POST}, "pre": {PRE}, "post": {POST}}[args.format_check]
     client = FormatServiceClient(
-        args.format_service_url, timeout=args.format_service_timeout, transfer=args.format_transfer
+        args.format_service_url, timeout=args.format_service_timeout, transfer=args.format_file_transfer
     )
     log = TimingLog(args.format_timing_log, args.format_run_id)
     log.run_record(format_flags(args), args.format_service_url if policy.enabled else None)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import tempfile
 import threading
@@ -13,16 +14,19 @@ from urllib.parse import urlsplit
 
 import httpx
 
-VALIDATE_PATH = "/api/v1/validate"
-VALIDATE_LOCAL_PATH = "/api/v1/validate/local"
+# One validation endpoint per mode: basic only needs file names (JSON body with paths);
+# structural and full need the files, uploaded or read in place from shared storage (/local).
+VALIDATE_PATH = "/api/v1/validate/{mode}"
+VALIDATE_LOCAL_PATH = "/api/v1/validate/{mode}/local"
 COMPATIBILITY_PATH = "/api/v1/compatibility"
+MODES = ("basic", "structural", "full")
 
 SUCCESS = "SUCCESS"
 UNCERTAIN = "UNCERTAIN"
 FAILURE = "FAILURE"
 ERROR = "ERROR"  # client-side: service unreachable or rejected the request
 
-# How a file reaches the service: by path on shared storage, or as an upload.
+# --format-file-transfer choices: how files reach the service in structural/full mode.
 AUTO, LOCAL, UPLOAD = "auto", "local", "upload"
 
 
@@ -76,7 +80,7 @@ class ValidationResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     infos: list[dict[str, Any]] = field(default_factory=list)
-    transfer: str | None = None  # local | upload, as actually used
+    transfer: str | None = None  # local | upload as actually used; None in basic mode (no file is sent)
     server_timing: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -117,65 +121,70 @@ class FormatServiceClient:
         format_iri: str,
         mode: str = "basic",
         secondaries: Sequence[FileRef] = (),
-        expected_crs: str | None = None,
-        expected_geometry_type: str | None = None,
+        expected_metadata: dict[str, str] | None = None,
     ) -> ValidationResult:
+        """Validate a file against a format. `expected_metadata` (e.g. {"crs": ...}) is used in full mode only."""
+        if mode not in MODES:
+            return ValidationResult(ERROR, errors=[{"message": f"unknown validation mode {mode!r}"}])
         try:
             namespace, identifier = split_format_iri(format_iri)
         except ValueError as exc:
             return ValidationResult(ERROR, errors=[{"message": str(exc)}])
-        fields = {"ontology_namespace": namespace, "format_identifier": identifier, "mode": mode}
-        if expected_crs:
-            fields["expected_crs"] = expected_crs
-        if expected_geometry_type:
-            fields["expected_geometry_type"] = expected_geometry_type
+        fields: dict[str, Any] = {"ontology_namespace": namespace, "format_identifier": identifier}
+        metadata = {k: v for k, v in (expected_metadata or {}).items() if v} if mode == "full" else {}
+
+        if mode == "basic":
+            payload = {**fields, **_paths(primary, secondaries)}
+            return self._result(self._post_json(VALIDATE_PATH.format(mode=mode), payload), None)
 
         refs = [primary, *secondaries]
         by_path = self.transfer != UPLOAD and not any(r.is_remote for r in refs)
         if by_path and (self.transfer == LOCAL or not self._local_disabled):
-            resp = self._post_local(fields, primary, secondaries)
+            payload = {**fields, **_paths(primary, secondaries)}
+            if metadata:
+                payload["expected_metadata"] = metadata
+            resp = self._post_json(VALIDATE_LOCAL_PATH.format(mode=mode), payload)
             if isinstance(resp, ValidationResult) or self.transfer == LOCAL or resp.status_code not in (403, 404):
                 return self._result(resp, LOCAL)
             if "disabled" in _detail(resp).lower():
                 with self._lock:
                     self._local_disabled = True
             # auto: the service cannot read this path (outside its shared dirs) -> upload instead
-        return self._result(self._post_upload(fields, primary, secondaries), UPLOAD)
+        if metadata:
+            fields["expected_metadata"] = json.dumps(metadata)
+        return self._result(self._post_upload(VALIDATE_PATH.format(mode=mode), fields, primary, secondaries), UPLOAD)
 
-    def _post_local(
-        self, fields: dict[str, str], primary: FileRef, secondaries: Sequence[FileRef]
-    ) -> httpx.Response | ValidationResult:
-        payload = {
-            **fields,
-            "file_path": os.path.abspath(primary.source),
-            "secondary_file_paths": [os.path.abspath(s.source) for s in secondaries],
-        }
+    def _post_json(self, path: str, payload: dict[str, Any]) -> httpx.Response | ValidationResult:
         try:
-            return self._http.post(VALIDATE_LOCAL_PATH, json=payload)
+            return self._http.post(path, json=payload)
         except httpx.HTTPError as exc:
             return ValidationResult(ERROR, errors=[{"message": f"format service request failed: {exc}"}])
 
     def _post_upload(
-        self, fields: dict[str, str], primary: FileRef, secondaries: Sequence[FileRef]
+        self, path: str, fields: dict[str, Any], primary: FileRef, secondaries: Sequence[FileRef]
     ) -> httpx.Response | ValidationResult:
         try:
             with contextlib.ExitStack() as stack:
                 files = [("file", (primary.basename, stack.enter_context(self._open(primary))))]
                 for sec in secondaries:
                     files.append(("secondary_files", (sec.basename, stack.enter_context(self._open(sec)))))
-                return self._http.post(VALIDATE_PATH, data=fields, files=files)
+                return self._http.post(path, data=fields, files=files)
         except (httpx.HTTPError, OSError) as exc:
             return ValidationResult(ERROR, errors=[{"message": f"format service request failed: {exc}"}])
 
     @staticmethod
-    def _result(resp: httpx.Response | ValidationResult, transfer: str) -> ValidationResult:
+    def _result(resp: httpx.Response | ValidationResult, transfer: str | None) -> ValidationResult:
         if isinstance(resp, ValidationResult):
             resp.transfer = transfer
             return resp
         timing = parse_server_timing(resp.headers.get("server-timing"))
         if resp.status_code != 200:
-            message = f"format service HTTP {resp.status_code}: {_detail(resp)}"
-            return ValidationResult(ERROR, errors=[{"message": message}], transfer=transfer, server_timing=timing)
+            detail = _detail(resp)
+            # The service cannot validate this format (not mapped / no validator): the file is
+            # neither confirmed nor refuted, like an UNCERTAIN result.
+            status = UNCERTAIN if resp.status_code == 400 and "not supported" in detail else ERROR
+            message = f"format service HTTP {resp.status_code}: {detail}"
+            return ValidationResult(status, errors=[{"message": message}], transfer=transfer, server_timing=timing)
         body = resp.json()
         return ValidationResult(
             str(body.get("status", ERROR)).upper(),
@@ -224,6 +233,15 @@ class FormatServiceClient:
                     tmp.write(chunk)
             tmp.seek(0)
             yield tmp  # type: ignore[misc]
+
+
+def _paths(primary: FileRef, secondaries: Sequence[FileRef]) -> dict[str, Any]:
+    """Absolute paths for the JSON endpoints; for remote files the URL path (only names matter in basic)."""
+
+    def path(ref: FileRef) -> str:
+        return urlsplit(ref.source).path if ref.is_remote else os.path.abspath(ref.source)
+
+    return {"file_path": path(primary), "secondary_file_paths": [path(s) for s in secondaries]}
 
 
 def _json(resp: httpx.Response) -> Any:

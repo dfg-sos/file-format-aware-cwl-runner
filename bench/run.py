@@ -3,9 +3,10 @@
     uv run python bench/run.py bench/raster_chain.cwl bench/inputs/raster_10MB.yml --repeat 10
 
 Every repetition is a fresh `cwl-format-aware-runner` process per variant: `off` (baseline, no
-service calls) plus every validation mode x transfer (`--transfers upload,local` compares sending
-files by path with uploading them; `local` needs the inputs and `--tmp-outdir-prefix` inside the
-service's shared dirs). Validation uses `warn` so an invalid file never shortens a run.
+service calls), `basic` (sends file paths only, no file transfer), and `structural`/`full` x transfer
+(`--transfers upload,local` compares sending files by path with uploading them; `local` needs
+the inputs and `--tmp-outdir-prefix` inside the service's shared dirs). Validation uses `warn`
+so an invalid file never shortens a run.
 Writes to the output dir:
   timing.jsonl  every run/check/main record (see README)
   runs.csv      one row per run: wall time, exit code, summed check, service-side validation and
@@ -45,7 +46,8 @@ def main() -> int:
     variants = [
         (mode, transfer)
         for mode in args.modes.split(",")
-        for transfer in (["-"] if mode == "off" else args.transfers.split(","))
+        # off has no checks; basic sends no files, so the transfer does not apply
+        for transfer in (["-"] if mode in ("off", "basic") else args.transfers.split(","))
     ]
     rows = []
     for rep in range(-args.warmup, args.repeat):
@@ -64,7 +66,9 @@ def main() -> int:
             if mode == "off":
                 cmd += ["--format-validation", "off"]
             else:
-                cmd += ["--format-validation", "warn", "--format-validation-mode", mode, "--format-transfer", transfer]
+                cmd += ["--format-validation", "warn", "--format-validation-mode", mode]
+                if transfer != "-":
+                    cmd += ["--format-file-transfer", transfer]
             if rep >= 0:
                 cmd += ["--format-timing-log", str(log)]
             if args.no_container:

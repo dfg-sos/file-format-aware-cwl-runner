@@ -185,8 +185,10 @@ def test_local_transfer_on_shared_storage(tmp_path):
                 f"{shared}/",
                 "--format-service-url",
                 SERVICE,
-                "--format-transfer",
+                "--format-file-transfer",
                 "local",
+                "--format-validation-mode",
+                "full",  # basic transfers no files; structural/full read them in place
                 "--format-timing-log",
                 str(log),
                 *args("d_shapefile_to_vector.cwl"),
