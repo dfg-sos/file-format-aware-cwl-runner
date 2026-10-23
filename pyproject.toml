@@ -16,7 +16,15 @@ cwl-format-aware-runner = "format_aware_cwl.runner:main"
 cwl-format-lint = "format_aware_cwl.lint:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.21", "ruff>=0.14"]
+dev = [
+    "pytest>=8",
+    "respx>=0.21",
+    "ruff>=0.14",
+    # data generators (bench/make_inputs.py, tests/fixtures/make_data.py); fiona has no Python 3.14 wheels yet
+    "numpy",
+    "rasterio",
+    "fiona; python_version < '3.14'",
+]
 
 [build-system]
 requires = ["hatchling"]

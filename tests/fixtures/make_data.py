@@ -1,7 +1,8 @@
 """Generate the small geodata files used by the fixtures (committed; rerun only to change them).
 
-Needs rasterio and fiona, e.g. the format service's venv:
-    ../sos-file-format-service/.venv/bin/python tests/fixtures/make_data.py
+    uv run tests/fixtures/make_data.py
+
+numpy, rasterio and fiona come with the dev dependency group (`uv sync`); fiona needs Python < 3.14.
 """
 
 from pathlib import Path

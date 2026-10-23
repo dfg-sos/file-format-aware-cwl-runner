@@ -1,6 +1,8 @@
 """Write GeoTIFF benchmark inputs of roughly the given sizes in MB (EPSG:4326, uncompressed uint8).
 
-../sos-file-format-service/.venv/bin/python bench/make_inputs.py 1 10 100
+    uv run bench/make_inputs.py 1 10 100
+
+numpy and rasterio come with the dev dependency group (`uv sync`).
 """
 
 import math
