@@ -67,13 +67,14 @@ class Validator:
                 )
                 continue
             ref = to_ref(f, resolve)
+            secondaries = secondary_refs(f, resolve)
             metadata = extensions.expected_metadata(port) if self.policy.mode == "full" else None
             t_start = now_ns()
             result = self.client.validate(
                 ref,
                 str(fmt),
                 mode=self.policy.mode,
-                secondaries=secondary_refs(f, resolve),
+                secondaries=secondaries,
                 expected_metadata=metadata,
             )
             t_end = now_ns()
@@ -85,6 +86,7 @@ class Validator:
                 direction=direction,
                 file=ref.basename,
                 size_bytes=ref.size(),
+                secondary_size_bytes=sum(s.size() or 0 for s in secondaries),
                 format=fmt,
                 mode=self.policy.mode,
                 result=result.status,
