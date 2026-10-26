@@ -37,7 +37,7 @@ BENCH_HOME="${BENCH_HOME:-$HOME/ffs-bench}"
 # format-validator 0.2.3 (GeoPackages validated by their declarations)
 FFS_IMAGE="${FFS_IMAGE:-docker://ghcr.io/dfg-sos/file-format-service@sha256:8997661dae320cacd0d97bf511bb0dd14d1cd2746d57eebbb1483ef11138c291}"
 SYMPOLIS_URL=https://github.com/dfg-sos/sympolis.git
-SYMPOLIS_COMMIT=55574991d6fed5cf1fbba51e06c17a1abae385e0
+SYMPOLIS_COMMIT=12c26055990b190fbe7862beed58353d33934c05
 # Sympolis' $schemas entry; the same file is used for the copy chains
 ONTOLOGY=https://dfg-sos.github.io/ontologies/releases/eo-formats/1.0.0/eo-formats.owl
 PORT="${PORT:-8000}"
