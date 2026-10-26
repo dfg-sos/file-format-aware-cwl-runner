@@ -4,8 +4,8 @@
 #   bash bench/hpc/bench.sh prepare      # once, on a node with internet access (login node or salloc)
 #   sbatch -p <partition> bench/hpc/bench.sh   # from the repository root
 #
-# RQ1  overhead on a real workflow: Sympolis (jobs/default.yml: Kahama_Small.gpkg), all modes,
-#      upload and local transfer, RQ1_REPEAT runs per variant, containers via --singularity
+# RQ1  overhead on a real workflow: Sympolis (jobs/default.yml with RQ1_INPUT, RQ1_DEPTH), all modes,
+#      upload and local transfer, RQ1_REPEAT runs per variant, containers via --singularity, steps --parallel
 # RQ2  impact of file size: copy chains over GeoTIFF, Shapefile and GeoPackage of SIZES MB, concrete
 #      formats, all modes, upload and local transfer, RQ2_REPEAT runs per variant
 # RQ3  abstract (eo:Raster / eo:Vector) instead of concrete formats on the RQ2 inputs, validated modes,
@@ -15,6 +15,8 @@
 #
 # Settings (environment variables, all optional):
 #   RQS="1 2 3"  SIZES="1 10 100 1000"  RQ1_REPEAT=3  RQ2_REPEAT=10  WARMUP=1  RQ3_TRANSFERS=local
+#   RQ1_INPUT=Kahama.gpkg   GeoPackage in Sympolis' data/input/ (Kahama_Small.gpkg for a quick check)
+#   RQ1_DEPTH=2   partitionDepth: 4^depth tiles processed in parallel (default.yml has 1)
 #   BENCH_HOME=$HOME/ffs-bench   persistent: service image, Singularity cache, Node.js, Sympolis checkout, ontology
 #   BENCH_WORK=$TMPDIR/ffs-bench-<job>   node-local scratch shared with the service: inputs and cwltool
 #                                        working dirs (needs ~4x the largest size per format, ~15 GB for 1000 MB)
@@ -42,6 +44,8 @@ PORT="${PORT:-8000}"
 RQS="${RQS:-1 2 3}"
 SIZES="${SIZES:-1 10 100 1000}"
 RQ1_REPEAT="${RQ1_REPEAT:-3}"
+RQ1_INPUT="${RQ1_INPUT:-Kahama.gpkg}"
+RQ1_DEPTH="${RQ1_DEPTH:-2}"
 RQ2_REPEAT="${RQ2_REPEAT:-10}"
 WARMUP="${WARMUP:-1}"
 RQ3_TRANSFERS="${RQ3_TRANSFERS:-local}"
@@ -54,6 +58,9 @@ mkdir -p "$BENCH_HOME" "$CWL_SINGULARITY_CACHE"
 if command -v module >/dev/null; then
     module load apptainer 2>/dev/null || true
     module load squashfs 2>/dev/null || true
+    # compute nodes may lack git and libatomic (needed by the prebuilt Node.js)
+    module load git 2>/dev/null || true
+    module load gcc 2>/dev/null || true
 fi
 cd "$REPO"
 [ -f pyproject.toml ] && [ -f bench/run.py ] || { echo "run from the repository root ($REPO)"; exit 1; }
@@ -125,6 +132,9 @@ trap 'stop_service; [ -n "${BENCH_WORK:-}" ] || rm -rf "$WORK"' EXIT
 cp -r "$BENCH_HOME/sympolis" "$WORK/sympolis"
 # point Sympolis' $schemas at the local copy (the only change to the workflow)
 { grep -rl "$ONTOLOGY" "$WORK/sympolis" --include='*.cwl' || true; } | xargs -r sed -i "s|$ONTOLOGY|file://$BENCH_HOME/eo-formats.owl|"
+# the RQ1 job: default.yml with RQ1_INPUT and RQ1_DEPTH, next to it so the relative input path still resolves
+[ -f "$WORK/sympolis/data/input/$RQ1_INPUT" ] || { echo "RQ1_INPUT not found: data/input/$RQ1_INPUT"; exit 1; }
+sed -e "s|/Kahama_Small\.gpkg|/$RQ1_INPUT|" -e "s|^partitionDepth: .*|partitionDepth: $RQ1_DEPTH|" "$WORK/sympolis/jobs/default.yml" >"$WORK/sympolis/jobs/bench.yml"
 # shellcheck disable=SC2086
 uv run --frozen bench/make_inputs.py --out "$WORK/inputs" --schema "file://$BENCH_HOME/eo-formats.owl" $SIZES \
     >"$RESULTS/inputs.txt"
@@ -140,8 +150,8 @@ bench() {  # bench <name> <run.py args...>; a failed verification is recorded, t
 for rq in $RQS; do
     case $rq in
     1)
-        bench rq1-sympolis "$WORK/sympolis/Sympolis.cwl" "$WORK/sympolis/jobs/default.yml" \
-            --repeat "$RQ1_REPEAT" --transfers upload,local --singularity
+        bench rq1-sympolis "$WORK/sympolis/Sympolis.cwl" "$WORK/sympolis/jobs/bench.yml" \
+            --repeat "$RQ1_REPEAT" --transfers upload,local --singularity --parallel
         ;;
     2 | 3)
         if [ "$rq" = 2 ]; then
