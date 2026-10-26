@@ -37,6 +37,15 @@ def vector(path: Path, driver: str, geom_type: str, coords: list) -> None:
             dst.write({"geometry": {"type": geom_type, "coordinates": c}, "properties": {"name": f"f{i}"}})
 
 
+def broken() -> None:
+    """Faulty inputs derived from the files above: GeoJSON content behind a .tif name (fixture I2)
+    and a GeoTIFF cut off inside its header (fixture J)."""
+    (DATA / "roads_as.tif").write_bytes((DATA / "roads.geojson").read_bytes())
+    (DATA / "raster_truncated.tif").write_bytes((DATA / "raster_4326.tif").read_bytes()[:TRUNCATE_AT])
+
+
+TRUNCATE_AT = 64  # bytes; the IFD of raster_4326.tif is cut off
+
 if __name__ == "__main__":
     DATA.mkdir(exist_ok=True)
     raster(DATA / "raster_4326.tif", "EPSG:4326")
@@ -44,5 +53,6 @@ if __name__ == "__main__":
     vector(DATA / "roads.geojson", "GeoJSON", "LineString", lines)
     vector(DATA / "roads.shp", "ESRI Shapefile", "LineString", lines)
     vector(DATA / "points.geojson", "GeoJSON", "Point", [(9.93, 49.79), (9.95, 49.80)])
+    broken()
     for p in sorted(DATA.iterdir()):
         print(p.name, p.stat().st_size)

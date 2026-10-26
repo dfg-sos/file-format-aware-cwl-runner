@@ -92,6 +92,10 @@ MATRIX = [
     ("e_unannotated.cwl", None, 0, 0, 0, 0),  # E
     ("g_unsupported_format.cwl", None, 0, 0, 0, 0),  # G: UNCERTAIN, only a warning by default
     ("h_invalid_metadata.cwl", "jobs/b.yml", 0, 0, 0, 1),  # H: metadata is only sent (and rejected) in full
+    ("i_input.cwl", "jobs/i1.yml", 0, 1, 1, 1),  # I1: workflow input with the wrong extension
+    ("i_input.cwl", "jobs/i2.yml", 0, 0, 0, 1),  # I2: workflow input, right extension, wrong content
+    ("i_input.cwl", "jobs/j.yml", 0, 0, 0, 1),  # J: truncated GeoTIFF
+    ("i_input.cwl", "jobs/i_ok.yml", 0, 0, 0, 0),  # I control
 ]
 
 
