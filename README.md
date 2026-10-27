@@ -23,6 +23,9 @@ The service ships no ontology or format mappings. `tests/fixtures/mappings/eo-fo
 the EO formats ontology's classes to the validator's format IDs; without a mapping, validation
 rejects every format. Formats without a validator (EsriJSON, GeoZarr, OSM_JSON, OSM_XML, PBF, VRT,
 WKB, XDMF) are not mapped.
+The service can be extended with validator plugins (in-process, installed into an image built on
+the service image). The runner needs no changes for that: map the new format IDs and point
+`--format-service-url` at that image.
 Formats come from the standalone EO formats ontology published at
 [dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/) (namespace
 `https://dfg-sos.github.io/ontologies/eo-formats#`, readable names like `GeoTIFF`, `Shapefile`,
