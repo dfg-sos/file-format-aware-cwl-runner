@@ -3,5 +3,3 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 *.jsonl
-bench/inputs/
-bench/results/
