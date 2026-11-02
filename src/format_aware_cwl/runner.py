@@ -33,7 +33,7 @@ def add_format_arguments(parser: argparse.ArgumentParser) -> None:
     )
     g.add_argument(
         "--format-validation-mode",
-        choices=["basic", "structural", "full"],
+        choices=["basic", "metadata", "content"],
         default="basic",
         help="Service validation depth (default %(default)s).",
     )

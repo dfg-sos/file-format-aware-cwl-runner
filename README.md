@@ -44,18 +44,18 @@ docker run ... -v /data/runs:/data/runs:ro -e SOS_FFS_SHARED_DIRS=/data/runs ...
 
 ## Runtime validation
 ```sh
-uv run cwl-format-aware-runner --format-validation-mode full tests/fixtures/a_relabel.cwl tests/fixtures/jobs/a2.yml
+uv run cwl-format-aware-runner --format-validation-mode metadata tests/fixtures/a_relabel.cwl tests/fixtures/jobs/a2.yml
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--format-service-url` | `$SOS_FFS_URL` or `http://localhost:8000` | service base URL |
 | `--format-validation off\|warn\|fail` | `fail` | `off` = plain cwltool (baseline); `warn` logs only; `fail` ends the step `permanentFail` |
-| `--format-validation-mode basic\|structural\|full` | `basic` | service depth: `basic` checks the file names only (extensions, multi-file components), `structural` also that the files exist, `full` also that they open as the format, plus CRS and geometry |
+| `--format-validation-mode basic\|metadata\|content` | `basic` | service depth: `basic` checks the file names only (extensions, multi-file components); `metadata` also opens the files as the format and checks their header: CRS and declared geometry type, at a cost independent of the file size; `content` also reads every pixel, feature or record, so truncated data and stray geometries fail |
 | `--format-check both\|pre\|post` | `both` | validate step inputs, outputs or both |
 | `--format-uncertain warn\|fail` | `warn` | handling of an `UNCERTAIN` result, including formats the service cannot validate (not mapped, no validator) |
 | `--format-service-error warn\|fail` | `fail` | service unreachable or request rejected (e.g. unmapped format) |
-| `--format-file-transfer auto\|local\|upload` | `auto` | how files reach the service in `structural`/`full` mode: `local` sends paths (`/validate/<mode>/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them. In `basic` mode no files are transferred, only their paths are sent. |
+| `--format-file-transfer auto\|local\|upload` | `auto` | how files reach the service in `metadata`/`content` mode: `local` sends paths (`/validate/<mode>/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them. In `basic` mode no files are transferred, only their paths are sent. |
 | `--format-service-timeout` | `300` | seconds per request |
 | `--format-timing-log FILE.jsonl` | none | instrumentation, see below |
 | `--format-run-id` | random | run id in the timing log |
@@ -71,7 +71,7 @@ Semantics:
 - **How files reach the service.**
   - In `basic` mode only the file names are sent (`/validate/basic`), so nothing is transferred and
     no shared directories are needed.
-  - In `structural` and `full` mode, local files are sent by path. If the service has local validation disabled, or the path lies
+  - In `metadata` and `content` mode, local files are sent by path. If the service has local validation disabled, or the path lies
     outside its shared directories, `auto` uploads the file instead. A "disabled" answer is
     remembered for the rest of the run.
   - Outputs live in cwltool's temporary output directories. Put those inside a shared directory
@@ -83,7 +83,7 @@ Semantics:
   (`--format-uncertain`). Invalid `sos:` metadata (e.g. `sos:expectedGeometryType` on a raster, or an
   unknown CRS) counts as an error (`--format-service-error`), because the workflow annotation is wrong.
 - **Not checked.** Cached steps (`--cachedir` hits) and ExpressionTools.
-- **`full` mode extensions.** Ports can declare the CRS and geometry type the file must have:
+- **`metadata` and `content` mode extensions.** Ports can declare the CRS and geometry type the file must have:
   ```yaml
   $namespaces: {sos: "https://dfg-sos.github.io/ontologies/cwl#"}
   outputs:
@@ -136,7 +136,7 @@ Fixtures in `tests/fixtures/`:
 
 | Fixture | What it shows |
 |---|---|
-| A1 / A2 | GeoJSON labelled GeoTIFF: vanilla cwltool passes, validation fails (A1 in basic mode, A2 only in full) |
+| A1 / A2 | GeoJSON labelled GeoTIFF: vanilla cwltool passes, validation fails (A1 in basic mode, A2 only in metadata and content) |
 | A, container | `a_relabel_docker.cwl`: the same run in Docker; skipped without Docker |
 | B | wrong CRS |
 | C | wrong geometry type |
@@ -144,9 +144,9 @@ Fixtures in `tests/fixtures/`:
 | E | unannotated ports are skipped |
 | F | the official online EDAM (EO formats are unknown there), linter |
 | G | output labelled with a format the service cannot validate (`eo:WKB`): `UNCERTAIN` |
-| H | invalid `sos:` annotation (`expectedGeometryType` on a GeoTIFF): rejected in full mode |
-| I1 / I2 | workflow input labelled GeoTIFF: GeoJSON named `.geojson` (fails in basic mode) or `.tif` (only in full); stops before the step runs |
-| J | truncated GeoTIFF as workflow input: fails in full mode only |
+| H | invalid `sos:` annotation (`expectedGeometryType` on a GeoTIFF): rejected in metadata and content mode |
+| I1 / I2 | workflow input labelled GeoTIFF: GeoJSON named `.geojson` (fails in basic mode) or `.tif` (only in metadata and content); stops before the step runs |
+| J | GeoTIFF truncated at 64 bytes as workflow input: fails in metadata and content mode |
 
 Data is generated by `tests/fixtures/make_data.py`.
 

@@ -12,7 +12,7 @@ OFF, WARN, FAIL = "off", "warn", "fail"
 @dataclass(frozen=True)
 class Policy:
     validation: str = FAIL  # off | warn | fail
-    mode: str = "basic"  # basic | structural | full (service validation mode)
+    mode: str = "basic"  # basic | metadata | content (service validation mode)
     uncertain: str = WARN  # warn | fail
     service_error: str = FAIL  # warn | fail
 

@@ -68,7 +68,7 @@ class Validator:
                 continue
             ref = to_ref(f, resolve)
             secondaries = secondary_refs(f, resolve)
-            metadata = extensions.expected_metadata(port) if self.policy.mode == "full" else None
+            metadata = extensions.expected_metadata(port) if self.policy.mode != "basic" else None
             t_start = now_ns()
             result = self.client.validate(
                 ref,

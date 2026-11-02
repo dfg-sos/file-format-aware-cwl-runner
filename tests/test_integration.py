@@ -14,7 +14,7 @@ service fetch. SOS_FFS_ONTOLOGY_URL overrides the URL the linter sends to
 the service (e.g. file:///ontology/eo-formats.owl for a mounted copy).
 
 Validation modes use separate endpoints: basic sends only file paths (/validate/basic),
-structural and full upload the files (/validate/<mode>) or let the service read them in place
+metadata and content upload the files (/validate/<mode>) or let the service read them in place
 (/validate/<mode>/local). By-path validation is tested only if SOS_FFS_TEST_SHARED_DIR names a host
 directory that the service shares (SOS_FFS_SHARED_DIRS); otherwise `auto` falls back to upload.
 """
@@ -81,30 +81,30 @@ def test_mapping_fixture_matches_ontology_and_is_accepted():
     assert resp.status_code == 200, resp.text
 
 
-# (workflow, job, vanilla exit, basic exit, structural exit, full exit), default policy (fail)
+# (workflow, job, vanilla exit, basic exit, metadata exit, content exit), default policy (fail)
 MATRIX = [
     ("a_relabel.cwl", "jobs/a1.yml", 0, 1, 1, 1),  # A1: wrong extension
-    ("a_relabel.cwl", "jobs/a2.yml", 0, 0, 0, 1),  # A2: right extension, wrong content
-    ("b_crs.cwl", "jobs/b.yml", 0, 0, 0, 1),  # B: wrong CRS
-    ("c_geometry.cwl", "jobs/c_points.yml", 0, 0, 0, 1),  # C: wrong geometry type
+    ("a_relabel.cwl", "jobs/a2.yml", 0, 0, 1, 1),  # A2: right extension, wrong content
+    ("b_crs.cwl", "jobs/b.yml", 0, 0, 1, 1),  # B: wrong CRS
+    ("c_geometry.cwl", "jobs/c_points.yml", 0, 0, 1, 1),  # C: wrong geometry type
     ("c_geometry.cwl", "jobs/c_roads.yml", 0, 0, 0, 0),  # C control
     ("d_shapefile_to_vector.cwl", "jobs/d.yml", 0, 0, 0, 0),  # multi-file Shapefile, subclass accepted
     ("e_unannotated.cwl", None, 0, 0, 0, 0),  # E
     ("g_unsupported_format.cwl", None, 0, 0, 0, 0),  # G: UNCERTAIN, only a warning by default
-    ("h_invalid_metadata.cwl", "jobs/b.yml", 0, 0, 0, 1),  # H: metadata is only sent (and rejected) in full
+    ("h_invalid_metadata.cwl", "jobs/b.yml", 0, 0, 1, 1),  # H: metadata is only sent (and rejected) in metadata and content
     ("i_input.cwl", "jobs/i1.yml", 0, 1, 1, 1),  # I1: workflow input with the wrong extension
-    ("i_input.cwl", "jobs/i2.yml", 0, 0, 0, 1),  # I2: workflow input, right extension, wrong content
-    ("i_input.cwl", "jobs/j.yml", 0, 0, 0, 1),  # J: truncated GeoTIFF
+    ("i_input.cwl", "jobs/i2.yml", 0, 0, 1, 1),  # I2: workflow input, right extension, wrong content
+    ("i_input.cwl", "jobs/j.yml", 0, 0, 1, 1),  # J: truncated GeoTIFF
     ("i_input.cwl", "jobs/i_ok.yml", 0, 0, 0, 0),  # I control
 ]
 
 
-@pytest.mark.parametrize("wf,job,vanilla,basic,structural,full", MATRIX, ids=[f"{w}:{j}" for w, j, *_ in MATRIX])
-def test_fixture_matrix(tmp_path, wf, job, vanilla, basic, structural, full):
+@pytest.mark.parametrize("wf,job,vanilla,basic,metadata,content", MATRIX, ids=[f"{w}:{j}" for w, j, *_ in MATRIX])
+def test_fixture_matrix(tmp_path, wf, job, vanilla, basic, metadata, content):
     files = args(wf, *([job] if job else []))
     common = ["--quiet", "--outdir", str(tmp_path / "out")]
     assert vanilla_main(argsl=[*common, *files]) == vanilla
-    for mode, expected in (("basic", basic), ("structural", structural), ("full", full)):
+    for mode, expected in (("basic", basic), ("metadata", metadata), ("content", content)):
         rc = runner.main([*common, "--format-service-url", SERVICE, "--format-validation-mode", mode, *files])
         assert rc == expected, f"{mode} mode"
 
@@ -118,15 +118,15 @@ def test_unsupported_format_is_uncertain(tmp_path):
 
 
 def test_invalid_metadata_is_an_error(tmp_path):
-    full = ["--format-validation-mode", "full"]
-    rc, checks = run(tmp_path, *full, *args("h_invalid_metadata.cwl", "jobs/b.yml"))
+    metadata = ["--format-validation-mode", "metadata"]
+    rc, checks = run(tmp_path, *metadata, *args("h_invalid_metadata.cwl", "jobs/b.yml"))
     assert rc == 1
     assert [(c["result"], "geometry_type" in c["message"]) for c in checks] == [("ERROR", True)]
-    rc, _ = run(tmp_path, *full, "--format-service-error", "warn", *args("h_invalid_metadata.cwl", "jobs/b.yml"))
+    rc, _ = run(tmp_path, *metadata, "--format-service-error", "warn", *args("h_invalid_metadata.cwl", "jobs/b.yml"))
     assert rc == 0
 
 
-@pytest.mark.parametrize("mode", ["structural", "full"])
+@pytest.mark.parametrize("mode", ["metadata", "content"])
 def test_upload_multi_file_format(tmp_path, mode):
     argv = ["--format-validation-mode", mode, "--format-file-transfer", "upload"]
     rc, checks = run(tmp_path, *argv, *args("d_shapefile_to_vector.cwl", "jobs/d.yml"))
@@ -146,7 +146,7 @@ def test_warn_mode_never_aborts(tmp_path):
             "--format-validation",
             "warn",
             "--format-validation-mode",
-            "full",
+            "metadata",
             *args("a_relabel.cwl", "jobs/a2.yml"),
         ]
     )
@@ -227,11 +227,11 @@ def test_container_jobs_are_checked(tmp_path):
     assert checks == [("relabel", "post", "SUCCESS"), ("consume", "pre", "SUCCESS")]
     assert {r["step"] for r in records if r["record"] == "main"} == {"relabel", "consume"}
     # A2 content error is caught in the containerised producer
-    assert runner.main([*common, "--format-validation-mode", "full", *files]) == 1
+    assert runner.main([*common, "--format-validation-mode", "metadata", *files]) == 1
 
 
 @pytest.mark.skipif(not SHARED_DIR, reason="SOS_FFS_TEST_SHARED_DIR not set")
-@pytest.mark.parametrize("mode", ["structural", "full"])
+@pytest.mark.parametrize("mode", ["metadata", "content"])
 def test_local_transfer_on_shared_storage(tmp_path, mode):
     shared = Path(tempfile.mkdtemp(dir=SHARED_DIR))
     try:
@@ -256,7 +256,7 @@ def test_local_transfer_on_shared_storage(tmp_path, mode):
                 "--format-file-transfer",
                 "local",
                 "--format-validation-mode",
-                mode,  # basic transfers no files; structural/full read them in place
+                mode,  # basic transfers no files; metadata/content read them in place
                 "--format-timing-log",
                 str(log),
                 *args("d_shapefile_to_vector.cwl"),
