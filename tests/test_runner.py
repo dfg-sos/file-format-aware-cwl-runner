@@ -17,7 +17,7 @@ def run(tmp_path, *argv, status="FAILURE"):
     log = tmp_path / "t.jsonl"
     with respx.mock(assert_all_called=False) as mock:
         # one route for every validation endpoint: /validate/<mode> and /validate/<mode>/local
-        route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate/(basic|structural|full)(/local)?$").mock(
+        route = mock.post(url__regex=rf"{SERVICE}/api/v1/validate/(basic|metadata|content)(/local)?$").mock(
             return_value=httpx.Response(200, json={"status": status, "errors": [{"message": "not a GeoTIFF"}]})
         )
         rc = runner.main(
@@ -88,10 +88,10 @@ def test_pre_check_failure_skips_command(tmp_path):
     assert by_type(records, "main") == []
 
 
-def test_full_mode_sends_extension_fields(tmp_path):
-    _, route, _ = run(tmp_path, "--format-validation-mode", "full", str(CWL / "produce.cwl"))
+def test_metadata_mode_sends_extension_fields(tmp_path):
+    _, route, _ = run(tmp_path, "--format-validation-mode", "metadata", str(CWL / "produce.cwl"))
     request = route.calls.last.request
-    assert request.url.path == "/api/v1/validate/full/local"  # host files are sent by path
+    assert request.url.path == "/api/v1/validate/metadata/local"  # host files are sent by path
     assert json.loads(request.content)["expected_metadata"] == {"crs": "EPSG:4326"}
 
 
@@ -114,7 +114,7 @@ def test_basic_mode_transfers_no_files(tmp_path):
 
 
 def test_upload_transfer_is_logged(tmp_path):
-    argv = ["--format-validation", "warn", "--format-validation-mode", "structural", "--format-file-transfer", "upload"]
+    argv = ["--format-validation", "warn", "--format-validation-mode", "metadata", "--format-file-transfer", "upload"]
     _, route, records = run(tmp_path, *argv, str(CWL / "wf.cwl"))
     assert {c["transfer"] for c in by_type(records, "check")} == {"upload"}
-    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate/structural"}
+    assert {call.request.url.path for call in route.calls} == {"/api/v1/validate/metadata"}

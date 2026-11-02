@@ -15,18 +15,18 @@ from urllib.parse import urlsplit
 import httpx
 
 # One validation endpoint per mode: basic only needs file names (JSON body with paths);
-# structural and full need the files, uploaded or read in place from shared storage (/local).
+# metadata and content need the files, uploaded or read in place from shared storage (/local).
 VALIDATE_PATH = "/api/v1/validate/{mode}"
 VALIDATE_LOCAL_PATH = "/api/v1/validate/{mode}/local"
 COMPATIBILITY_PATH = "/api/v1/compatibility"
-MODES = ("basic", "structural", "full")
+MODES = ("basic", "metadata", "content")
 
 SUCCESS = "SUCCESS"
 UNCERTAIN = "UNCERTAIN"
 FAILURE = "FAILURE"
 ERROR = "ERROR"  # client-side: service unreachable or rejected the request
 
-# --format-file-transfer choices: how files reach the service in structural/full mode.
+# --format-file-transfer choices: how files reach the service in metadata/content mode.
 AUTO, LOCAL, UPLOAD = "auto", "local", "upload"
 
 
@@ -123,7 +123,7 @@ class FormatServiceClient:
         secondaries: Sequence[FileRef] = (),
         expected_metadata: dict[str, str] | None = None,
     ) -> ValidationResult:
-        """Validate a file against a format. `expected_metadata` (e.g. {"crs": ...}) is used in full mode only."""
+        """Validate a file against a format. `expected_metadata` (e.g. {"crs": ...}) is not used in basic mode."""
         if mode not in MODES:
             return ValidationResult(ERROR, errors=[{"message": f"unknown validation mode {mode!r}"}])
         try:
@@ -131,7 +131,7 @@ class FormatServiceClient:
         except ValueError as exc:
             return ValidationResult(ERROR, errors=[{"message": str(exc)}])
         fields: dict[str, Any] = {"ontology_namespace": namespace, "format_identifier": identifier}
-        metadata = {k: v for k, v in (expected_metadata or {}).items() if v} if mode == "full" else {}
+        metadata = {k: v for k, v in (expected_metadata or {}).items() if v} if mode != "basic" else {}
 
         if mode == "basic":
             payload = {**fields, **_paths(primary, secondaries)}

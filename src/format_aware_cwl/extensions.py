@@ -1,4 +1,4 @@
-"""CWL extension fields for `full` mode: expected CRS and geometry type on a File port.
+"""CWL extension fields for `metadata` and `content` mode: expected CRS and geometry type on a File port.
 
 Declare in a CWL document:
     $namespaces: {sos: "https://dfg-sos.github.io/ontologies/cwl#"}
