@@ -88,13 +88,15 @@ MATRIX = [
     ("b_crs.cwl", "jobs/b.yml", 0, 0, 1, 1),  # B: wrong CRS
     ("c_geometry.cwl", "jobs/c_points.yml", 0, 0, 1, 1),  # C: wrong geometry type
     ("c_geometry.cwl", "jobs/c_roads.yml", 0, 0, 0, 0),  # C control
+    ("c_geometry.cwl", "jobs/c_mixed.yml", 0, 0, 0, 1),  # C mixed: one stray Point among the LineStrings
     ("d_shapefile_to_vector.cwl", "jobs/d.yml", 0, 0, 0, 0),  # multi-file Shapefile, subclass accepted
     ("e_unannotated.cwl", None, 0, 0, 0, 0),  # E
     ("g_unsupported_format.cwl", None, 0, 0, 0, 0),  # G: UNCERTAIN, only a warning by default
-    ("h_invalid_metadata.cwl", "jobs/b.yml", 0, 0, 1, 1),  # H: metadata is only sent (and rejected) in metadata and content
+    ("h_invalid_metadata.cwl", "jobs/b.yml", 0, 0, 1, 1),  # H: sos: fields are only sent (and rejected) beyond basic
     ("i_input.cwl", "jobs/i1.yml", 0, 1, 1, 1),  # I1: workflow input with the wrong extension
     ("i_input.cwl", "jobs/i2.yml", 0, 0, 1, 1),  # I2: workflow input, right extension, wrong content
-    ("i_input.cwl", "jobs/j.yml", 0, 0, 1, 1),  # J: truncated GeoTIFF
+    ("i_input.cwl", "jobs/j.yml", 0, 0, 1, 1),  # J: GeoTIFF truncated in its header
+    ("i_input.cwl", "jobs/k.yml", 0, 0, 0, 1),  # K: GeoTIFF truncated in its pixel data
     ("i_input.cwl", "jobs/i_ok.yml", 0, 0, 0, 0),  # I control
 ]
 
@@ -124,6 +126,26 @@ def test_invalid_metadata_is_an_error(tmp_path):
     assert [(c["result"], "geometry_type" in c["message"]) for c in checks] == [("ERROR", True)]
     rc, _ = run(tmp_path, *metadata, "--format-service-error", "warn", *args("h_invalid_metadata.cwl", "jobs/b.yml"))
     assert rc == 0
+
+
+@pytest.mark.parametrize(
+    "wf,job,message",
+    [
+        ("i_input.cwl", "jobs/k.yml", "pixel data"),  # header intact, pixel strip cut off
+        ("c_geometry.cwl", "jobs/c_mixed.yml", "incompatible with expected type"),  # 1 of 3 features is a Point
+    ],
+)
+def test_content_mode_reads_beyond_metadata(tmp_path, wf, job, message):
+    """Faults past the header: metadata mode only opens the file (and samples geometry types), so it passes;
+    content mode reads every pixel or feature and fails."""
+    (tmp_path / "metadata").mkdir()
+    rc, checks = run(tmp_path / "metadata", "--format-validation-mode", "metadata", *args(wf, job))
+    assert rc == 0
+    assert {(c["mode"], c["result"]) for c in checks} == {("metadata", "SUCCESS")}
+    (tmp_path / "content").mkdir()
+    rc, checks = run(tmp_path / "content", "--format-validation-mode", "content", *args(wf, job))
+    assert rc == 1
+    assert [(c["mode"], c["result"], message in c["message"]) for c in checks] == [("content", "FAILURE", True)]
 
 
 @pytest.mark.parametrize("mode", ["metadata", "content"])

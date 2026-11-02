@@ -124,7 +124,11 @@ def test_metadata_local_sends_paths_and_metadata(client, tmp_path):
         return_value=httpx.Response(200, json=OK, headers={"Server-Timing": "resolve;dur=0.1, validate;dur=5.5"})
     )
     result = client.validate(
-        refs[0], EO + "Shapefile", mode="metadata", secondaries=refs[1:], expected_metadata={"crs": "EPSG:4326", "x": ""}
+        refs[0],
+        EO + "Shapefile",
+        mode="metadata",
+        secondaries=refs[1:],
+        expected_metadata={"crs": "EPSG:4326", "x": ""},
     )
     assert (result.status, result.transfer, result.server_timing) == (
         SUCCESS,

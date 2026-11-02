@@ -5,6 +5,7 @@
 numpy, rasterio and fiona come with the dev dependency group (`uv sync`); fiona needs Python < 3.14.
 """
 
+import json
 from pathlib import Path
 
 import fiona
@@ -38,13 +39,22 @@ def vector(path: Path, driver: str, geom_type: str, coords: list) -> None:
 
 
 def broken() -> None:
-    """Faulty inputs derived from the files above: GeoJSON content behind a .tif name (fixture I2)
-    and a GeoTIFF cut off inside its header (fixture J)."""
+    """Faulty inputs derived from the files above: GeoJSON content behind a .tif name (fixture I2),
+    a GeoTIFF cut off inside its header (fixture J) or inside its pixel data (fixture K), and
+    LineStrings with one stray Point (fixture C, mixed)."""
     (DATA / "roads_as.tif").write_bytes((DATA / "roads.geojson").read_bytes())
-    (DATA / "raster_truncated.tif").write_bytes((DATA / "raster_4326.tif").read_bytes()[:TRUNCATE_AT])
+    tif = (DATA / "raster_4326.tif").read_bytes()
+    (DATA / "raster_truncated.tif").write_bytes(tif[:TRUNCATE_AT])
+    (DATA / "raster_truncated_pixels.tif").write_bytes(tif[:-TRUNCATE_PIXELS])
+    roads = json.loads((DATA / "roads.geojson").read_text())
+    point = {"type": "Point", "coordinates": [9.93, 49.79]}
+    stray = {"type": "Feature", "properties": {"name": "stray"}, "geometry": point}
+    roads["features"].append(stray)
+    (DATA / "roads_stray_point.geojson").write_text(json.dumps(roads, indent=1) + "\n")
 
 
 TRUNCATE_AT = 64  # bytes; the IFD of raster_4326.tif is cut off
+TRUNCATE_PIXELS = 8  # bytes cut from the end; the header is intact, the 16-byte pixel strip is not
 
 if __name__ == "__main__":
     DATA.mkdir(exist_ok=True)
