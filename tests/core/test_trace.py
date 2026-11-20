@@ -7,7 +7,7 @@ from sos_cwl.core.trace import RunInfo, Trace
 
 @pytest.fixture
 def run_info() -> RunInfo:
-    return RunInfo(versions={"cwltool": "1"}, extensions=["formats"], arguments={"mode": "basic"})
+    return RunInfo(versions={"cwltool": "1"}, extensions=["format-validation"], arguments={"mode": "basic"})
 
 
 def test_trace_starts_with_the_run_record(tmp_path, run_info):
@@ -19,7 +19,7 @@ def test_trace_starts_with_the_run_record(tmp_path, run_info):
     assert [r["record"] for r in lines] == ["run", "check"]
     assert all(r["run_id"] == "r1" for r in lines)
     assert lines[0]["versions"] == {"cwltool": "1"}
-    assert lines[0]["extensions"] == ["formats"]
+    assert lines[0]["extensions"] == ["format-validation"]
     assert lines[0]["arguments"] == {"mode": "basic"}
 
 

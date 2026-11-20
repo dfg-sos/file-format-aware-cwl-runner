@@ -12,23 +12,28 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-SOS_NAMESPACE = "https://dfg-sos.github.io/ontologies/cwl#"
-EXPECTED_CRS = SOS_NAMESPACE + "expectedCRS"
-EXPECTED_GEOMETRY_TYPE = SOS_NAMESPACE + "expectedGeometryType"
+SOS_CWL = "https://dfg-sos.github.io/ontologies/cwl#"
 
 
-def _get(port: Mapping[str, Any], iri: str) -> str | None:
-    # schema-salad expands namespaced keys to the full IRI; accept the prefixed form too.
-    value = port.get(iri, port.get("sos:" + iri[len(SOS_NAMESPACE) :]))
+def sos_field(mapping: Mapping[str, Any], name: str) -> Any:
+    """Value of the extension field `sos:<name>`.
+
+    schema-salad expands namespaced keys to the full IRI; the prefixed form is accepted too.
+    """
+    return mapping.get(SOS_CWL + name, mapping.get("sos:" + name))
+
+
+def _get(port: Mapping[str, Any], name: str) -> str | None:
+    value = sos_field(port, name)
     return str(value) if value not in (None, "") else None
 
 
 def expected_crs(port: Mapping[str, Any]) -> str | None:
-    return _get(port, EXPECTED_CRS)
+    return _get(port, "expectedCRS")
 
 
 def expected_geometry_type(port: Mapping[str, Any]) -> str | None:
-    return _get(port, EXPECTED_GEOMETRY_TYPE)
+    return _get(port, "expectedGeometryType")
 
 
 def expected_metadata(port: Mapping[str, Any]) -> dict[str, str]:
