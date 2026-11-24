@@ -1,6 +1,6 @@
 [project]
 name = "sos-cwl-runner"
-version = "0.3.0.dev0"
+version = "0.3.0"
 description = "cwltool with SOS extensions: file format validation (SOS File Format Service) and resource demand annotations"
 readme = "README.md"
 license = "MIT"
