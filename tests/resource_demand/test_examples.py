@@ -19,6 +19,7 @@ EXPECTED = {
     "count-features.cwl": {"ram": "O(1)", "time": "O(f)"},
     "cloud-mask.cwl": {"ram": "O(n)", "time": "O(n · c)"},
     "concat.cwl": {"ram": "O(m)", "time": "O(k · b)"},
+    "zonal-stats.cwl": {"ram": "O(n + v)", "time": "O(b · n + v)"},
 }
 
 
