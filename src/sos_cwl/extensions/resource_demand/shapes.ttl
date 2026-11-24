@@ -1,0 +1,189 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rd:   <https://dfg-sos.github.io/ontologies/resource-demand#> .
+@prefix cwl:  <https://w3id.org/cwl/cwl#> .
+@prefix rdsh: <https://dfg-sos.github.io/ontologies/resource-demand-shapes#> .
+
+# SHACL shapes for parametric dependency annotations (rd:complexityVariables, rd:ramDemand,
+# rd:timeDemand). They validate the RDF form of an annotation (see validate.py) together with the
+# resource-demand vocabulary and the document's domain vocabularies ($schemas), which provide the
+# class hierarchy (rdfs:subClassOf) the SPARQL constraints walk and rd:appliesToFormat.
+
+rdsh: a owl:Ontology ;
+    rdfs:label "SOS parametric dependency shapes" ;
+    sh:declare
+        [ sh:prefix "rd" ;   sh:namespace "https://dfg-sos.github.io/ontologies/resource-demand#"^^xsd:anyURI ] ,
+        [ sh:prefix "cwl" ;  sh:namespace "https://w3id.org/cwl/cwl#"^^xsd:anyURI ] ,
+        [ sh:prefix "rdfs" ; sh:namespace "http://www.w3.org/2000/01/rdf-schema#"^^xsd:anyURI ] .
+
+# ---------------------------------------------------------------- complexity variables
+
+rdsh:VariableShape a sh:NodeShape ;
+    sh:targetObjectsOf rd:complexityVariables ;
+    sh:closed true ;
+    sh:ignoredProperties ( rdf:type ) ;
+    # symbol and measure are present, strings, and symbols unique: checked while reading the annotation
+    sh:property [
+        sh:path rd:symbol ;
+        sh:pattern "^[A-Za-z_][A-Za-z0-9_]*$" ;
+        sh:message "symbol {?value} must be a name matching [A-Za-z_][A-Za-z0-9_]*" ;
+    ] , [
+        sh:path rd:measure ;
+        sh:nodeKind sh:IRI ;
+        sh:message "measure {?value} is not an IRI: use a declared prefix, e.g. rd:FileSize" ;
+    ] , [
+        sh:path rd:probe ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "probe must be a single path or IRI of a CWL tool" ;
+    ] ;
+    sh:sparql [
+        sh:message "measure {?value} is not a rd:Measure (e.g. rd:Value, rd:ArrayLength, rd:FileSize, or a measure of a vocabulary in $schemas)" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this rd:measure ?value .
+                FILTER (isIRI(?value))
+                FILTER NOT EXISTS { ?value rdfs:subClassOf+ rd:Measure }
+            }""" ;
+    ] , [
+        sh:message "derived measure {?value} needs a probe: the CWL tool that computes it" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this rd:measure ?value .
+                ?value rdfs:subClassOf* rd:DerivedMeasure .
+                FILTER NOT EXISTS { $this rd:probe ?probe }
+            }""" ;
+    ] , [
+        sh:message "measure {?value} is read by the runner itself; a probe is only allowed for a rd:DerivedMeasure" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this rd:measure ?value ; rd:probe ?probe .
+                FILTER NOT EXISTS { ?value rdfs:subClassOf* rd:DerivedMeasure }
+            }""" ;
+    ] , [
+        sh:message "measure rd:Value needs a numeric input (int, long, float, double), not {?type}" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value ?type WHERE {
+                ?port rd:complexityVariables $this ; cwl:type ?type .
+                $this rd:measure ?value .
+                ?value rdfs:subClassOf* rd:Value .
+                FILTER (?type NOT IN ("int", "long", "float", "double"))
+            }""" ;
+    ] , [
+        sh:message "measure rd:ArrayLength needs an array input, not {?type}" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value ?type WHERE {
+                ?port rd:complexityVariables $this ; cwl:type ?type .
+                $this rd:measure ?value .
+                ?value rdfs:subClassOf* rd:ArrayLength .
+                FILTER (?type != "array")
+            }""" ;
+    ] , [
+        sh:message "measure {?value} needs a File input (or an array of Files), not {?type}" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value ?type WHERE {
+                ?port rd:complexityVariables $this ; cwl:type ?type .
+                $this rd:measure ?value .
+                { ?value rdfs:subClassOf* rd:FileSize } UNION { ?value rd:appliesToFormat ?any }
+                FILTER (?type != "File")
+                FILTER NOT EXISTS { ?port cwl:type "array" ; cwl:items "File" }
+            }""" ;
+    ] , [
+        sh:message "measure {?value} depends on the file format: declare a format on the input" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                ?port rd:complexityVariables $this .
+                $this rd:measure ?value .
+                ?value rd:appliesToFormat ?required .
+                FILTER NOT EXISTS { ?port cwl:format ?format }
+            }""" ;
+    ] , [
+        sh:message "measure {?value} cannot be taken from format {?format}" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT DISTINCT $this ?value ?format WHERE {
+                ?port rd:complexityVariables $this ; cwl:format ?format .
+                $this rd:measure ?value .
+                ?value rd:appliesToFormat ?required .
+                FILTER (isIRI(?format))
+                FILTER NOT EXISTS { ?value rd:appliesToFormat ?ok . ?format rdfs:subClassOf* ?ok }
+            }""" ;
+    ] .
+
+# Formats given as expressions cannot be checked statically.
+rdsh:FormatExpressionShape a sh:NodeShape ;
+    sh:targetObjectsOf rd:complexityVariables ;
+    sh:severity sh:Warning ;
+    sh:sparql [
+        sh:message "format of the input is an expression; cannot check that measure {?value} applies to it" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                ?port rd:complexityVariables $this ; cwl:format ?format .
+                $this rd:measure ?value .
+                ?value rd:appliesToFormat ?required .
+                FILTER (isLiteral(?format))
+            }""" ;
+    ] .
+
+# ---------------------------------------------------------------- demands
+
+# A term {n: rd:Linear, ...} is read into one factor per entry, each with exactly one variable (unique within
+# the term) and one complexity string: only the values are checked here.
+
+rdsh:FactorShape a sh:NodeShape ;
+    sh:targetObjectsOf rd:factors ;
+    sh:property [
+        sh:path rd:complexity ;
+        sh:nodeKind sh:IRI ;
+        sh:message "complexity {?value} is not an IRI: use a declared prefix, e.g. rd:Linear" ;
+    ] ;
+    sh:sparql [
+        sh:message "complexity {?value} is not a rd:ComplexityClass (rd:Constant, rd:Logarithmic, rd:Linear, rd:Linearithmic, rd:Quadratic, rd:Cubic, rd:Exponential)" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this rd:complexity ?value .
+                FILTER (isIRI(?value))
+                FILTER NOT EXISTS { ?value rdfs:subClassOf+ rd:ComplexityClass }
+            }""" ;
+    ] , [
+        sh:message "variable {?value} is not declared: add it to rd:complexityVariables of an input of this tool" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this rd:variable ?value .
+                ?term rd:factors $this .
+                ?rr ?demand ?term .
+                ?tool cwl:requirements|cwl:hints ?rr .
+                FILTER NOT EXISTS { ?tool cwl:inputs/rd:complexityVariables/rd:symbol ?value }
+            }""" ;
+    ] .
+
+# ---------------------------------------------------------------- per tool
+
+rdsh:UnusedVariableShape a sh:NodeShape ;
+    sh:targetClass cwl:CommandLineTool ;
+    sh:severity sh:Warning ;
+    sh:sparql [
+        sh:message "variable {?value} is declared but not used by any demand" ;
+        sh:prefixes rdsh: ;
+        sh:select """
+            SELECT $this ?value WHERE {
+                $this cwl:inputs/rd:complexityVariables/rd:symbol ?value .
+                FILTER NOT EXISTS {
+                    $this cwl:requirements|cwl:hints ?rr .
+                    ?rr ?demand ?term . ?term rd:factors/rd:variable ?value .
+                }
+            }""" ;
+    ] .
