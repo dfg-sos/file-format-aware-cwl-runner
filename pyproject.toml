@@ -21,7 +21,6 @@ sos-cwl-lint = "sos_cwl.core.lint:main"
 # Extensions: the core finds them here and never imports them itself.
 [project.entry-points."sos_cwl.extensions"]
 format-validation = "sos_cwl.extensions.format_validation:FormatValidationExtension"
-resource-demand = "sos_cwl.extensions.resource_demand:ResourceDemandExtension"
 
 [dependency-groups]
 dev = [
