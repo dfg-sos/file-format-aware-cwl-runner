@@ -1,0 +1,1 @@
+scene: {class: File, path: mask.tif, format: "https://dfg-sos.github.io/ontologies/eo-formats#GeoTIFF"}
