@@ -5,9 +5,10 @@ the DFG project SOS. A small **core** hooks into cwltool; **extensions** use the
 | Extension | Design time (`sos-cwl-lint`) | Run time (`sos-cwl-runner`) | Docs |
 |---|---|---|---|
 | `format-validation` | connected ports have compatible formats | validate the real files of each step with the [SOS File Format Service](https://github.com/dfg-sos/file-format-service) | [format-validation.md](docs/extensions/format-validation.md) |
+| `resource-demand` | parametric dependency annotations are valid; shown as Big O | log the annotated demand and the measured inputs of each job | [resource-demand.md](docs/extensions/resource-demand.md) |
 
-The extension fields (`sos:expectedCRS`, `sos:expectedGeometryType`) and the vocabularies they
-refer to are defined at [dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/).
+The extension fields (`sos:expectedCRS`, `rd:complexityVariables`, `rd:ramDemand`, ...) and the
+vocabularies they refer to are defined at [dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/).
 
 Pinned versions: cwltool 3.3.20260925135507, cwl-utils 0.45 (see `pyproject.toml` / `uv.lock`).
 
@@ -17,8 +18,8 @@ uv sync
 uv run sos-cwl-runner [cwltool flags] [extension flags] workflow.cwl job.yml
 uv run sos-cwl-lint [--extension NAME] [--strict] documents.cwl...
 ```
-- `sos-cwl-runner` accepts every cwltool flag, plus each extension's flags (`--format-...`).
-  `uv run sos-cwl-runner --help` lists them by extension.
+- `sos-cwl-runner` accepts every cwltool flag, plus each extension's flags (`--format-...`,
+  `--resource-demand`). `uv run sos-cwl-runner --help` lists them by extension.
 - `sos-cwl-lint` runs the design-time checks of all extensions, or of those given with `--extension`.
   Exit code 1 on errors (`--strict`: also on warnings).
 
@@ -37,14 +38,16 @@ The core writes:
 | `hook` | extension, hook (`before_job`/`after_job`), step, job, failed, t_start, t_end, duration_ms: one extension hook for one job |
 | `cached` | step (a `--cachedir` hit; no hooks run) |
 
-The extensions add their own observations (`check`, `skip`), see their docs.
+The extensions add their own observations (`check`, `skip`; `demand`), see their docs.
 
 ## Layout
 ```
 src/sos_cwl/core/                           hooks into cwltool, CLIs, run trace; knows no extension
 src/sos_cwl/extensions/format_validation/   File Format Service client, runtime validation, format lint
+src/sos_cwl/extensions/resource_demand/     annotations, SHACL shapes, Big O, demand records, probes
 tests/core/                                 the hooks, with a recording extension
 tests/format_validation/                    one folder per extension, with its own fixtures
+tests/resource_demand/
 docs/cwltool-hook-points.md                 how the core hooks into cwltool (no fork)
 ```
 Each extension imports only `sos_cwl.core`, never another extension, and the core imports no
@@ -75,6 +78,7 @@ uv run pytest                    # all unit tests (format service mocked; integr
 uv run pytest tests/core         # the core alone, without any extension
 uv run pytest tests/format_validation -m integration   # against a running File Format Service, see format-validation.md
 ```
+The resource-demand tests need no network: they bring the vocabulary releases they use.
 
 ## Evaluation
 The evaluation of the format extension (fault-injection scenarios, overhead benchmarks on an HPC
