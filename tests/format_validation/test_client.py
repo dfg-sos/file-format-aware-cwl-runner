@@ -4,19 +4,17 @@ import httpx
 import pytest
 import respx
 
-from format_aware_cwl.client import (
-    ERROR,
-    FAILURE,
-    SUCCESS,
-    UNCERTAIN,
+from sos_cwl.extensions.format_validation.client import (
     FileRef,
     FormatServiceClient,
+    Mode,
+    Transfer,
     ValidationResult,
+    ValidationStatus,
     parse_server_timing,
     split_format_iri,
 )
-from format_aware_cwl.policy import Policy
-from format_aware_cwl.timing import TimingLog
+from sos_cwl.extensions.format_validation.policy import Policy, Reaction
 
 BASE = "http://ffs.test"
 EO = "https://dfg-sos.github.io/ontologies/eo-formats#"
@@ -41,7 +39,7 @@ def client():
 
 @pytest.fixture
 def uploader():
-    c = FormatServiceClient(BASE, transfer="upload")
+    c = FormatServiceClient(BASE, transfer=Transfer.UPLOAD)
     yield c
     c.close()
 
@@ -85,7 +83,7 @@ def test_parse_server_timing():
 
 
 def test_unknown_mode_is_error(client, tif):
-    assert client.validate(tif, GEOTIFF, mode="deep").status == ERROR
+    assert client.validate(tif, GEOTIFF, mode="deep").status == ValidationStatus.ERROR
 
 
 # --- basic: paths only, no file transfer --------------------------------------------------------------------------
@@ -98,7 +96,7 @@ def test_basic_sends_only_paths(uploader, tmp_path):
         return_value=httpx.Response(200, json=OK, headers={"Server-Timing": "validate;dur=0.2"})
     )
     result = uploader.validate(refs[0], EO + "Shapefile", secondaries=refs[1:], expected_metadata={"crs": "x"})
-    assert (result.status, result.transfer, result.server_timing) == (SUCCESS, None, {"validate": 0.2})
+    assert (result.status, result.transfer, result.server_timing) == (ValidationStatus.SUCCESS, None, {"validate": 0.2})
     assert json.loads(route.calls.last.request.content) == {  # no metadata in basic mode
         "ontology_namespace": EO,
         "format_identifier": "Shapefile",
@@ -126,13 +124,13 @@ def test_metadata_local_sends_paths_and_metadata(client, tmp_path):
     result = client.validate(
         refs[0],
         EO + "Shapefile",
-        mode="metadata",
+        mode=Mode.METADATA,
         secondaries=refs[1:],
         expected_metadata={"crs": "EPSG:4326", "x": ""},
     )
     assert (result.status, result.transfer, result.server_timing) == (
-        SUCCESS,
-        "local",
+        ValidationStatus.SUCCESS,
+        Transfer.LOCAL,
         {"resolve": 0.1, "validate": 5.5},
     )
     assert json.loads(route.calls.last.request.content) == {
@@ -149,7 +147,7 @@ def test_auto_falls_back_to_upload_outside_shared_dirs(client, tif):
     by_path = respx.post(local("metadata")).mock(return_value=httpx.Response(403, json={"detail": "outside"}))
     uploaded = respx.post(upload("metadata")).mock(return_value=httpx.Response(200, json=OK))
     for _ in range(2):
-        assert client.validate(tif, GEOTIFF, mode="metadata").transfer == "upload"
+        assert client.validate(tif, GEOTIFF, mode=Mode.METADATA).transfer == Transfer.UPLOAD
     assert (by_path.call_count, uploaded.call_count) == (2, 2)  # other paths may still be shared
 
 
@@ -159,7 +157,7 @@ def test_auto_remembers_disabled_local_validation(client, tif):
     by_path = respx.post(local("metadata")).mock(return_value=httpx.Response(403, json=detail))
     respx.post(upload("metadata")).mock(return_value=httpx.Response(200, json=OK))
     for _ in range(3):
-        assert client.validate(tif, GEOTIFF, mode="metadata").status == SUCCESS
+        assert client.validate(tif, GEOTIFF, mode=Mode.METADATA).status == ValidationStatus.SUCCESS
     assert by_path.call_count == 1
 
 
@@ -167,8 +165,8 @@ def test_auto_remembers_disabled_local_validation(client, tif):
 def test_forced_local_does_not_fall_back(tif):
     respx.post(local("metadata")).mock(return_value=httpx.Response(403, json={"detail": "disabled"}))
     uploaded = respx.post(upload("metadata"))
-    result = FormatServiceClient(BASE, transfer="local").validate(tif, GEOTIFF, mode="metadata")
-    assert (result.status, result.transfer) == (ERROR, "local")
+    result = FormatServiceClient(BASE, transfer=Transfer.LOCAL).validate(tif, GEOTIFF, mode=Mode.METADATA)
+    assert (result.status, result.transfer) == (ValidationStatus.ERROR, "local")
     assert uploaded.call_count == 0
 
 
@@ -177,7 +175,7 @@ def test_auto_uploads_remote_files_directly(client):
     respx.get("https://data.test/a/out.tif").mock(return_value=httpx.Response(200, content=b"REMOTE"))
     route = respx.post(upload("metadata")).mock(return_value=httpx.Response(200, json=OK))
     by_path = respx.post(local("metadata"))
-    client.validate(FileRef("https://data.test/a/out.tif", "out.tif"), GEOTIFF, mode="metadata")
+    client.validate(FileRef("https://data.test/a/out.tif", "out.tif"), GEOTIFF, mode=Mode.METADATA)
     assert b"REMOTE" in route.calls.last.request.content
     assert by_path.call_count == 0
 
@@ -195,7 +193,7 @@ def test_upload_statuses_and_fields(uploader, tif, status):
             headers={"Server-Timing": "receive;dur=2"},
         )
     )
-    result = uploader.validate(tif, GEOTIFF, mode="metadata", expected_metadata={"crs": "EPSG:4326"})
+    result = uploader.validate(tif, GEOTIFF, mode=Mode.METADATA, expected_metadata={"crs": "EPSG:4326"})
     assert (result.status, result.transfer, result.server_timing) == (status.upper(), "upload", {"receive": 2.0})
     body = route.calls.last.request.content
     assert b'name="format_identifier"\r\n\r\nGeoTIFF' in body
@@ -209,7 +207,7 @@ def test_upload_statuses_and_fields(uploader, tif, status):
 def test_upload_shapefile_sends_secondaries(uploader, tmp_path):
     refs = shapefile(tmp_path)
     route = respx.post(upload("metadata")).mock(return_value=httpx.Response(200, json=OK))
-    uploader.validate(refs[0], EO + "Shapefile", mode="metadata", secondaries=refs[1:])
+    uploader.validate(refs[0], EO + "Shapefile", mode=Mode.METADATA, secondaries=refs[1:])
     body = route.calls.last.request.content
     assert body.count(b'name="secondary_files"') == 3
     assert b'name="file"; filename="roads.shp"' in body
@@ -219,25 +217,34 @@ def test_upload_shapefile_sends_secondaries(uploader, tmp_path):
 @pytest.mark.parametrize(
     "detail,status",
     [
-        ("Format identifier 'GeoZarr' not supported for ontology namespace 'x'", UNCERTAIN),  # no validator
-        ("Unsupported metadata keys ['geometry_type'], supported keys are ['crs'].", ERROR),  # workflow annotation
-        ("Invalid projection: EPSG:99999999", ERROR),
+        (
+            "Format identifier 'GeoZarr' not supported for ontology namespace 'x'",
+            ValidationStatus.UNCERTAIN,
+        ),  # no validator
+        (
+            "Unsupported metadata keys ['geometry_type'], supported keys are ['crs'].",
+            ValidationStatus.ERROR,
+        ),  # workflow annotation
+        ("Invalid projection: EPSG:99999999", ValidationStatus.ERROR),
     ],
 )
 @respx.mock
 def test_http_400(uploader, tif, detail, status):
     respx.post(upload("metadata")).mock(return_value=httpx.Response(400, json={"detail": detail}))
-    result = uploader.validate(tif, GEOTIFF, mode="metadata")
+    result = uploader.validate(tif, GEOTIFF, mode=Mode.METADATA)
     assert result.status == status
     assert detail[:20] in result.message
 
 
-@pytest.mark.parametrize("transfer", ["upload", "local"])
+@pytest.mark.parametrize("transfer", [Transfer.UPLOAD, Transfer.LOCAL])
 @respx.mock
 def test_service_down(tif, transfer):
     respx.post(upload("metadata")).mock(side_effect=httpx.ConnectError("refused"))
     respx.post(local("metadata")).mock(side_effect=httpx.ConnectError("refused"))
-    assert FormatServiceClient(BASE, transfer=transfer).validate(tif, GEOTIFF, mode="metadata").status == ERROR
+    assert (
+        FormatServiceClient(BASE, transfer=transfer).validate(tif, GEOTIFF, mode=Mode.METADATA).status
+        == ValidationStatus.ERROR
+    )
 
 
 # --- compatibility -----------------------------------------------------------------------------
@@ -286,27 +293,15 @@ def test_compatibility_service_error_not_cached(client, response):
 @pytest.mark.parametrize(
     "policy,status,fatal",
     [
-        (Policy(validation="fail"), FAILURE, True),
-        (Policy(validation="fail"), SUCCESS, False),
-        (Policy(validation="fail"), UNCERTAIN, False),
-        (Policy(validation="fail", uncertain="fail"), UNCERTAIN, True),
-        (Policy(validation="fail"), ERROR, True),
-        (Policy(validation="fail", service_error="warn"), ERROR, False),
-        (Policy(validation="warn"), FAILURE, False),
-        (Policy(validation="off"), FAILURE, False),
+        (Policy(validation=Reaction.FAIL), ValidationStatus.FAILURE, True),
+        (Policy(validation=Reaction.FAIL), ValidationStatus.SUCCESS, False),
+        (Policy(validation=Reaction.FAIL), ValidationStatus.UNCERTAIN, False),
+        (Policy(validation=Reaction.FAIL, uncertain=Reaction.FAIL), ValidationStatus.UNCERTAIN, True),
+        (Policy(validation=Reaction.FAIL), ValidationStatus.ERROR, True),
+        (Policy(validation=Reaction.FAIL, service_error=Reaction.WARN), ValidationStatus.ERROR, False),
+        (Policy(validation=Reaction.WARN), ValidationStatus.FAILURE, False),
+        (Policy(validation=Reaction.OFF), ValidationStatus.FAILURE, False),
     ],
 )
 def test_policy(policy, status, fatal):
     assert policy.is_fatal(ValidationResult(status)) is fatal
-
-
-def test_timing_log(tmp_path):
-    path = tmp_path / "t.jsonl"
-    log = TimingLog(str(path), run_id="r1")
-    log.run_record({"mode": "basic"}, "http://x")
-    log.write("check", step="s", duration_ms=1.5)
-    log.close()
-    lines = [json.loads(line) for line in path.read_text().splitlines()]
-    assert [r["record"] for r in lines] == ["run", "check"]
-    assert all(r["run_id"] == "r1" for r in lines)
-    assert lines[0]["versions"]["cwltool"] == "3.3.20260925135507"

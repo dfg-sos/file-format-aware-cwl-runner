@@ -1,7 +1,7 @@
 [project]
-name = "format-aware-cwl-runner"
-version = "0.2.0"
-description = "cwltool extension that validates files against their declared format via the SOS File Format Service"
+name = "sos-cwl-runner"
+version = "0.3.0.dev0"
+description = "cwltool with SOS extensions: file format validation (SOS File Format Service) and resource demand annotations"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12,<3.16"
@@ -9,18 +9,25 @@ dependencies = [
     "cwltool==3.3.20260925135507",
     "cwl-utils==0.45",
     "httpx>=0.27",
+    "rdflib>=7.1",
+    "pyshacl>=0.30",
+    "packaging>=24",
 ]
 
 [project.scripts]
-cwl-format-aware-runner = "format_aware_cwl.runner:main"
-cwl-format-lint = "format_aware_cwl.lint:main"
+sos-cwl-runner = "sos_cwl.core.runner:main"
+sos-cwl-lint = "sos_cwl.core.lint:main"
+
+# Extensions: the core finds them here and never imports them itself.
+[project.entry-points."sos_cwl.extensions"]
+format-validation = "sos_cwl.extensions.format_validation:FormatValidationExtension"
 
 [dependency-groups]
 dev = [
     "pytest>=8",
     "respx>=0.21",
     "ruff>=0.14",
-    # data generator (tests/fixtures/make_data.py); fiona has no Python 3.14 wheels yet
+    # data generator (tests/format_validation/fixtures/make_data.py); fiona has no Python 3.14 wheels yet
     "numpy",
     "rasterio",
     "fiona; python_version < '3.14'",
@@ -31,7 +38,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/format_aware_cwl"]
+packages = ["src/sos_cwl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

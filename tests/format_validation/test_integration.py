@@ -1,12 +1,12 @@
 """Acceptance tests against a running SOS File Format Service.
 
-    docker run -d -p 8000:8000 -v "$PWD/tests/fixtures/mappings:/app/mappings:ro" \
-        ghcr.io/dfg-sos/file-format-service:latest
+    docker run -d -p 8000:8000 -v "$PWD/tests/format_validation/fixtures/mappings:/app/mappings:ro" \
+        ghcr.io/dfg-sos/file-format-service-eo:latest
     uv run pytest -m integration
 
 These tests carry the `integration` marker and are deselected in a plain `uv run pytest`
 (see `addopts` in pyproject.toml). The service ships no format mappings;
-tests/fixtures/mappings/eo-formats.json provides the one for the EO formats ontology.
+tests/format_validation/fixtures/mappings/eo-formats.json provides the one for the EO formats ontology.
 
 The CWL fixtures load the EO formats ontology from
 https://dfg-sos.github.io/ontologies/eo-formats.owl (`$schemas`), which both cwltool and the
@@ -28,13 +28,24 @@ from pathlib import Path
 
 import httpx
 import pytest
+from cwl_utils.parser import load_document_by_uri
 from cwltool.main import main as vanilla_main
 
-from format_aware_cwl import lint, runner
+from sos_cwl.core import lint as core_lint
+from sos_cwl.core import runner as core_runner
+from sos_cwl.extensions.format_validation import FormatValidationExtension, lint
+from sos_cwl.extensions.format_validation.client import FormatServiceClient
 
 pytestmark = pytest.mark.integration
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def runner_main(argv):
+    """The runner with this extension only, validating (`--format-validation fail`) unless `argv` says otherwise."""
+    return core_runner.main(["--format-validation", "fail", *argv], extensions=[FormatValidationExtension()])
+
+
 SERVICE = os.environ.get("SOS_FFS_URL", "http://localhost:8000")
 ONTOLOGY_OVERRIDE = os.environ.get("SOS_FFS_ONTOLOGY_URL")
 SHARED_DIR = os.environ.get("SOS_FFS_TEST_SHARED_DIR")
@@ -54,11 +65,10 @@ def args(*names):
 
 
 def run(tmp_path, *argv):
-    """Run the format-aware runner; returns (exit code, check records of the timing log)."""
+    """Run the format-aware runner; returns (exit code, check records of the run trace)."""
     log = tmp_path / "t.jsonl"
-    rc = runner.main(
-        ["--quiet", "--outdir", str(tmp_path / "out"), "--format-service-url", SERVICE]
-        + ["--format-timing-log", str(log), *argv]
+    rc = runner_main(
+        ["--quiet", "--outdir", str(tmp_path / "out"), "--format-service-url", SERVICE] + ["--trace", str(log), *argv]
     )
     checks = [r for r in map(json.loads, log.read_text().splitlines()) if r["record"] == "check"]
     return rc, checks
@@ -107,7 +117,7 @@ def test_fixture_matrix(tmp_path, wf, job, vanilla, basic, metadata, content):
     common = ["--quiet", "--outdir", str(tmp_path / "out")]
     assert vanilla_main(argsl=[*common, *files]) == vanilla
     for mode, expected in (("basic", basic), ("metadata", metadata), ("content", content)):
-        rc = runner.main([*common, "--format-service-url", SERVICE, "--format-validation-mode", mode, *files])
+        rc = runner_main([*common, "--format-service-url", SERVICE, "--format-validation-mode", mode, *files])
         assert rc == expected, f"{mode} mode"
 
 
@@ -158,7 +168,7 @@ def test_upload_multi_file_format(tmp_path, mode):
 
 
 def test_warn_mode_never_aborts(tmp_path):
-    rc = runner.main(
+    rc = runner_main(
         [
             "--quiet",
             "--outdir",
@@ -175,9 +185,9 @@ def test_warn_mode_never_aborts(tmp_path):
     assert rc == 0
 
 
-def test_timing_log_records(tmp_path):
+def test_trace_records(tmp_path):
     log = tmp_path / "t.jsonl"
-    runner.main(
+    runner_main(
         [
             "--quiet",
             "--outdir",
@@ -186,21 +196,32 @@ def test_timing_log_records(tmp_path):
             SERVICE,
             "--format-validation",
             "warn",
-            "--format-timing-log",
+            "--trace",
             str(log),
             *args("a_relabel.cwl", "jobs/a2.yml"),
         ]
     )
     records = [json.loads(line) for line in log.read_text().splitlines()]
     checks = [r for r in records if r["record"] == "check"]
-    assert [(c["step"], c["direction"], c["result"]) for c in checks] == [
+    assert [(c["step"], c["phase"], c["result"]) for c in checks] == [
         ("relabel", "post", "SUCCESS"),
         ("consume", "pre", "SUCCESS"),
     ]
-    assert {r["step"] for r in records if r["record"] == "main"} == {"relabel", "consume"}
+    assert {r["step"] for r in records if r["record"] == "job"} == {"relabel", "consume"}
     assert all(c["duration_ms"] > 0 and c["size_bytes"] > 0 for c in checks)
     # basic mode (default): only paths are sent, no file transfer
     assert all(c["mode"] == "basic" and c["transfer"] is None and "validate" in c["server_timing"] for c in checks)
+
+
+def lint_statuses(wf):
+    """(source, sink) -> status of every connection, checked by the running service."""
+    doc = load_document_by_uri(args(wf)[0])
+    ontologies = [ONTOLOGY_OVERRIDE] if ONTOLOGY_OVERRIDE else doc.loadingOptions.schemas
+    client = FormatServiceClient(SERVICE)
+    try:
+        return {(c.source, c.sink): c.status for c in lint.Linter(client).check(doc, ontologies)}
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(
@@ -211,24 +232,20 @@ def test_timing_log_records(tmp_path):
     ],
 )
 def test_linter_fixture_d(capsys, wf, expected, rc):
+    assert lint_statuses(wf)[("roads", "consume/data")] == expected
     argv = [
         "--format-service-url",
         SERVICE,
         *(["--format-ontology-url", ONTOLOGY_OVERRIDE] if ONTOLOGY_OVERRIDE else []),
     ]
-    assert lint.main([*argv, "--json", *args(wf)]) == rc
-    findings = json.loads(capsys.readouterr().out)["findings"]
-    assert {(f["source"], f["sink"]): f["status"] for f in findings}[("roads", "consume/data")] == expected
-    assert lint.main([*argv, *args(wf)]) == rc  # text output
-    assert expected.upper() in capsys.readouterr().out
+    assert core_lint.main([*argv, *args(wf)], extensions=[FormatValidationExtension()]) == rc
+    assert "roads -> consume/data" in capsys.readouterr().out
 
 
-def test_linter_official_online_edam(capsys):
+def test_linter_official_online_edam():
     """The service fetches the official EDAM itself; EO formats are not part of it (422 -> unknown-format)."""
-    rc = lint.main(["--format-service-url", SERVICE, "--json", *args("f_edam_online.cwl")])
-    findings = {f["sink"]: f["status"] for f in json.loads(capsys.readouterr().out)["findings"]}
-    assert findings == {"align/s": "compatible", "climate/c": "incompatible", "gis/g": "unknown-format"}
-    assert rc == 1
+    found = {sink: status for (_, sink), status in lint_statuses("f_edam_online.cwl").items()}
+    assert found == {"align/s": "compatible", "climate/c": "incompatible", "gis/g": "unknown-format"}
 
 
 def _docker_available() -> bool:
@@ -243,13 +260,13 @@ def test_container_jobs_are_checked(tmp_path):
     files = args("a_relabel_docker.cwl", "jobs/a2.yml")
     common = ["--quiet", "--outdir", str(tmp_path / "out"), "--format-service-url", SERVICE]
     log = tmp_path / "t.jsonl"
-    assert runner.main([*common, "--format-validation", "warn", "--format-timing-log", str(log), *files]) == 0
+    assert runner_main([*common, "--format-validation", "warn", "--trace", str(log), *files]) == 0
     records = [json.loads(line) for line in log.read_text().splitlines()]
-    checks = [(r["step"], r["direction"], r["result"]) for r in records if r["record"] == "check"]
+    checks = [(r["step"], r["phase"], r["result"]) for r in records if r["record"] == "check"]
     assert checks == [("relabel", "post", "SUCCESS"), ("consume", "pre", "SUCCESS")]
-    assert {r["step"] for r in records if r["record"] == "main"} == {"relabel", "consume"}
+    assert {r["step"] for r in records if r["record"] == "job"} == {"relabel", "consume"}
     # A2 content error is caught in the containerised producer
-    assert runner.main([*common, "--format-validation-mode", "metadata", *files]) == 1
+    assert runner_main([*common, "--format-validation-mode", "metadata", *files]) == 1
 
 
 @pytest.mark.skipif(not SHARED_DIR, reason="SOS_FFS_TEST_SHARED_DIR not set")
@@ -264,7 +281,7 @@ def test_local_transfer_on_shared_storage(tmp_path, mode):
             f'roads: {{class: File, location: {shared / "roads.shp"}, format: "https://dfg-sos.github.io/ontologies/eo-formats#Shapefile"}}\n'
         )
         log = tmp_path / "t.jsonl"
-        rc = runner.main(
+        rc = runner_main(
             [
                 "--quiet",
                 "--outdir",
@@ -279,7 +296,7 @@ def test_local_transfer_on_shared_storage(tmp_path, mode):
                 "local",
                 "--format-validation-mode",
                 mode,  # basic transfers no files; metadata/content read them in place
-                "--format-timing-log",
+                "--trace",
                 str(log),
                 *args("d_shapefile_to_vector.cwl"),
                 str(job),

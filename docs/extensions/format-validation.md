@@ -1,0 +1,152 @@
+# Extension: format validation
+Runtime validation of the files a workflow reads and writes, and design-time format compatibility,
+with the [SOS File Format Service](https://github.com/dfg-sos/file-format-service).
+Code: [`src/sos_cwl/extensions/format_validation/`](../../src/sos_cwl/extensions/format_validation/), tests: [`tests/format_validation/`](../../tests/format_validation/).
+
+Vanilla cwltool checks format *labels*: a tool's declared output `format` is stamped onto the
+produced File without looking at it, so a mislabelled file passes every downstream check. This
+extension sends the actual files to the service before (pre) and after (post) every step.
+
+## Setup
+```sh
+uv sync
+docker run -d --name sos-ffs -p 8000:8000 \
+  -v "$PWD/tests/format_validation/fixtures/mappings:/app/mappings:ro" \
+  ghcr.io/dfg-sos/file-format-service-eo:latest   # API on :8000
+```
+The service ships no ontology or format mappings. `tests/format_validation/fixtures/mappings/eo-formats.json` maps
+the EO formats ontology's classes to the validator's format IDs; without a mapping, validation
+rejects every format. Formats without a validator (EsriJSON, GeoZarr, OSM_JSON, OSM_XML, PBF, VRT,
+WKB, XDMF) are not mapped.
+The service can be extended with validator plugins (in-process, installed into an image built on
+the service image). The runner needs no changes for that: map the new format IDs and point
+`--format-service-url` at that image.
+Formats come from the standalone EO formats ontology published at
+[dfg-sos.github.io/ontologies](https://dfg-sos.github.io/ontologies/) (namespace
+`https://dfg-sos.github.io/ontologies/eo-formats#`, readable names like `GeoTIFF`, `Shapefile`,
+`Vector`). The `sos:` extension fields are documented there as well. Workflows declare it like this:
+```yaml
+$namespaces: {eo: "https://dfg-sos.github.io/ontologies/eo-formats#"}
+$schemas: [https://dfg-sos.github.io/ontologies/eo-formats.owl]
+```
+
+To let the service read files in place instead of receiving uploads, share the directories that
+hold the workflow's inputs and cwltool's working directories with the service. Mount them under the
+same path and list them in `SOS_FFS_SHARED_DIRS`:
+```sh
+docker run ... -v /data/runs:/data/runs:ro -e SOS_FFS_SHARED_DIRS=/data/runs ...
+```
+
+## Runtime validation
+```sh
+uv run sos-cwl-runner --format-validation fail --format-validation-mode metadata tests/format_validation/fixtures/a_relabel.cwl tests/format_validation/fixtures/jobs/a2.yml
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--format-service-url` | `$SOS_FFS_URL` or `http://localhost:8000` | service base URL |
+| `--format-validation off\|warn\|fail` | `off` | `off` = plain cwltool (baseline); `warn` logs only; `fail` ends the step `permanentFail` |
+| `--format-validation-mode basic\|metadata\|content` | `basic` | service depth: `basic` checks the file names only (extensions, multi-file components); `metadata` also opens the files as the format and checks their header: CRS and declared geometry type, at a cost independent of the file size; `content` also reads every pixel, feature or record, so truncated data and stray geometries fail |
+| `--format-check both\|pre\|post` | `both` | validate step inputs, outputs or both |
+| `--format-uncertain warn\|fail` | `warn` | handling of an `UNCERTAIN` result, including formats the service cannot validate (not mapped, no validator) |
+| `--format-service-error warn\|fail` | `fail` | service unreachable or request rejected (e.g. unmapped format) |
+| `--format-file-transfer auto\|local\|upload` | `auto` | how files reach the service in `metadata`/`content` mode: `local` sends paths (`/validate/<mode>/local`), `upload` sends the bytes, `auto` sends paths and falls back to upload when the service cannot read them. In `basic` mode no files are transferred, only their paths are sent. |
+| `--format-service-timeout` | `300` | seconds per request |
+
+Semantics:
+- **Which files are checked.** Only Files that carry a `format`. Files without one are skipped and
+  logged as `skip`. Arrays, records, scatter and secondaryFiles are walked, with one check per File.
+- **What a file is checked against.** Its own `format` label. For outputs, cwltool has already
+  evaluated any `format` expression into a concrete label. For inputs, cwltool has already checked
+  that the label fits the port, so a GeoTIFF fed into a `Raster` port is validated as GeoTIFF.
+- **Shapefiles.** The `.shp` is the primary file and its `secondaryFiles` (`.shx`, `.dbf`, `.prj`)
+  are sent with it.
+- **How files reach the service.**
+  - In `basic` mode only the file names are sent (`/validate/basic`), so nothing is transferred and
+    no shared directories are needed.
+  - In `metadata` and `content` mode, local files are sent by path. If the service has local validation disabled, or the path lies
+    outside its shared directories, `auto` uploads the file instead. A "disabled" answer is
+    remembered for the rest of the run.
+  - Outputs live in cwltool's temporary output directories. Put those inside a shared directory
+    with `--tmp-outdir-prefix` (and `--tmpdir-prefix`), otherwise outputs are uploaded.
+  - Remote (`http(s)`) File locations are fetched and uploaded.
+- **What a failure does.** A failed pre-check marks the step `permanentFail` without running it. A
+  failed post-check fails the step after it ran.
+- **Service rejections.** A format the service cannot validate counts as `UNCERTAIN`
+  (`--format-uncertain`). Invalid `sos:` metadata (e.g. `sos:expectedGeometryType` on a raster, or an
+  unknown CRS) counts as an error (`--format-service-error`), because the workflow annotation is wrong.
+- **Not checked.** Cached steps (`--cachedir` hits) and ExpressionTools.
+- **`metadata` and `content` mode extensions.** Ports can declare the CRS and geometry type the file must have:
+  ```yaml
+  $namespaces: {sos: "https://dfg-sos.github.io/ontologies/cwl#"}
+  outputs:
+    roads: {type: File, format: eo:GeoJSON, sos:expectedCRS: "EPSG:4326", sos:expectedGeometryType: LineString}
+  ```
+
+### Run trace records
+With `--trace` (see the [README](../../README.md#run-trace)) this extension adds:
+
+| `record` | Fields |
+|---|---|
+| `check` | step, job, port, phase (`pre`/`post`), file, size_bytes (primary file), secondary_size_bytes (its secondaryFiles), format, mode, result, message, transfer (`local`/`upload`; `null` in basic mode, where no file is sent), server_timing (the service's `Server-Timing` durations in ms, e.g. `receive`/`resolve`, `validate`), t_start, t_end (ns, monotonic), duration_ms (client round trip) |
+| `skip` | step, job, port, phase, file, reason |
+
+`step` is the workflow step id; `job` is cwltool's unique job name (`_2`, `_3`… for scatter elements).
+
+## Design-time linter
+```sh
+uv run sos-cwl-lint --extension format-validation tests/format_validation/fixtures/d_shapefile_to_geotiff.cwl
+```
+`incompatible`, `unknown-format` and `error` are errors, `unannotated` a warning
+(fails with `--strict`) and `expression` an info. A document without `$schemas` (and no
+`--format-ontology-url`) is skipped.
+Every connection (workflow input or step output → step input or workflow output, nested workflows
+included) is checked with `/compatibility`. A connection is compatible if every source format is
+compatible with at least one sink format, in at least one of the ontologies.
+
+Other statuses:
+- `unknown-format`: a format that no ontology defines (the service answers 422), e.g. a typo or
+  the wrong ontology.
+- `expression`: the format is an expression; skipped.
+- `unannotated`: the port has no `format`. `--strict` makes these fail the lint.
+
+Exit code 1 on `incompatible`, `unknown-format` or service `error`.
+
+The ontologies are all of the document's `$schemas` entries, or the repeatable
+`--format-ontology-url`. The **service** fetches them, so they must be reachable from the service.
+Use `--format-ontology-url file:///ontology/eo-formats.owl` for a copy mounted into the service.
+
+Other online ontologies work too. The official EDAM (`http://edamontology.org/EDAM.owl`) takes
+about 4 s to fetch and parse the first time, then the service caches it. It contains no EO
+formats, so `eo:` formats checked against EDAM alone are `unknown-format` (fixture F).
+
+## Tests
+```sh
+uv run pytest tests/format_validation                   # service mocked (integration tests are deselected)
+uv run pytest tests/format_validation -m integration    # acceptance tests against the running service (fixtures A–K)
+SOS_FFS_TEST_SHARED_DIR=/path/shared/with/service uv run pytest tests/format_validation -m integration   # also by-path validation
+```
+Fixtures in `tests/format_validation/fixtures/`:
+
+| Fixture | What it shows |
+|---|---|
+| A1 / A2 | GeoJSON labelled GeoTIFF: vanilla cwltool passes, validation fails (A1 in basic mode, A2 only in metadata and content) |
+| A, container | `a_relabel_docker.cwl`: the same run in Docker; skipped without Docker |
+| B | wrong CRS |
+| C | wrong geometry type; with one stray Point among the LineStrings it fails only in content mode (metadata mode accepts a file if any geometry type matches) |
+| D | Shapefile → GeoTIFF (incompatible) / → Vector (compatible), linter |
+| E | unannotated ports are skipped |
+| F | the official online EDAM (EO formats are unknown there), linter |
+| G | output labelled with a format the service cannot validate (`eo:WKB`): `UNCERTAIN` |
+| H | invalid `sos:` annotation (`expectedGeometryType` on a GeoTIFF): rejected in metadata and content mode |
+| I1 / I2 | workflow input labelled GeoTIFF: GeoJSON named `.geojson` (fails in basic mode) or `.tif` (only in metadata and content); stops before the step runs |
+| J | GeoTIFF truncated at 64 bytes as workflow input: fails in metadata and content mode |
+| K | GeoTIFF truncated inside its pixel data as workflow input: the header is intact, so it fails only in content mode |
+
+Data is generated by `tests/format_validation/fixtures/make_data.py`.
+
+## Evaluation
+The evaluation (fault-injection scenarios, overhead benchmarks on an HPC node, raw results) lives in the
+artifact repository [format-aware-cwl-icsa27-artifact](https://github.com/dfg-sos/format-aware-cwl-icsa27-artifact).
+It uses release 0.2.0, whose instrumentation was the timing log (`--format-timing-log`); its successor is
+the run trace (`--trace`).
